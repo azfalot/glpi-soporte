@@ -29,8 +29,7 @@ async function getPage() {
   if (_ctx && _page && !_page.isClosed()) return _page;
   unlockProfile(PROFILE);
   _ctx = await firefox.launchPersistentContext(PROFILE, {
-    headless: true,
-    args: ["--headless"],
+    headless: false,
     viewport: { width: 1440, height: 900 },
     ignoreHTTPSErrors: true,
     firefoxUserPrefs: FF_PREFS

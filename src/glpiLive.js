@@ -30,8 +30,7 @@ async function getPage() {
   // Desbloquear perfil antes de lanzar (por si quedó lock de una sesión anterior)
   unlockProfile(PROFILE);
   _ctx = await firefox.launchPersistentContext(PROFILE, {
-    headless: true,
-    args: ["--headless"],
+    headless: false,
     viewport: { width: 1440, height: 900 },
     ignoreHTTPSErrors: true,
     firefoxUserPrefs: FF_PREFS

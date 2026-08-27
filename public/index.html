@@ -200,9 +200,12 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
       </div>
     </div>
     <div class="ticket-list" id="ticket-list">
-      <div class="empty" style="flex-direction:column;gap:8px;padding:30px 14px">
-        <span class="spin"></span><div style="margin-top:8px">Cargando bandeja…</div>
+      <div id="bandeja-loading" style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:30px 14px;color:var(--txt2)">
+        <span class="spin" style="width:18px;height:18px;border-width:2px"></span>
+        <div style="font-size:.8rem;text-align:center">Conectando con GLPI…</div>
+        <div id="bandeja-loading-detail" style="font-size:.7rem;color:var(--bg4);text-align:center"></div>
       </div>
+      <div id="bandeja-items" style="display:none"></div>
     </div>
   </aside>
 
@@ -322,9 +325,19 @@ function handleEvent(ev) {
 
   switch (ev.type) {
     case "job:start":
+      if (ev.jobId === "load-tickets-startup" || ev.jobId === "load-tickets") {
+        setBandejaDetail("Conectando con GLPI…");
+      }
       setProgress(ev.label);
       break;
     case "job:progress":
+      if (ev.jobId === "load-tickets-startup" || ev.jobId === "load-tickets") {
+        setBandejaDetail(ev.detail || ev.step || "");
+      } else if (ev.jobId && ev.jobId.startsWith("ticket-")) {
+        const tid = ev.jobId.replace("ticket-","");
+        const done = pendingTickets.filter(t => cacheStatus[t.id]==="done"||cacheStatus[t.id]==="error").length;
+        setBandejaDetail(`${done}/${pendingTickets.length} — #${tid}: ${ev.detail||ev.step||""}`);
+      }
       setProgress(ev.detail || ev.step || ev.label);
       break;
     case "job:done":
@@ -463,19 +476,22 @@ function setSection(id, html) {
 }
 
 // ── Bandeja ───────────────────────────────────────────────────────────────
+let pendingTickets = [];   // lista completa recibida del servidor
+
 document.getElementById("btn-refresh").onclick = async () => {
   const btn = document.getElementById("btn-refresh");
   btn.disabled = true;
   document.getElementById("refresh-ico").className = "spin";
-  document.getElementById("ticket-list").innerHTML =
-    '<div class="empty" style="flex-direction:column">Conectando con GLPI…</div>';
+  // Volver al estado de carga
+  document.getElementById("bandeja-items").style.display = "none";
+  document.getElementById("bandeja-loading").style.display = "flex";
+  setBandejaDetail("Conectando con GLPI…");
+  pendingTickets = [];
   setDot("glpi", "running");
   try {
     await api("/api/tickets/refresh", {});
-    // Los tickets llegarán por SSE (tickets:ready)
   } catch(e) {
-    document.getElementById("ticket-list").innerHTML =
-      `<div class="empty" style="color:var(--err)">${esc(e.message)}</div>`;
+    setBandejaDetail("❌ " + e.message);
     setDot("glpi", "err");
     btn.disabled = false;
     document.getElementById("refresh-ico").textContent = "⟳";
@@ -490,17 +506,53 @@ document.getElementById("manual-id").onkeydown = e => {
   if (e.key === "Enter") document.getElementById("btn-manual").click();
 };
 
+function setBandejaDetail(text) {
+  const el = document.getElementById("bandeja-loading-detail");
+  if (el) el.textContent = text;
+}
+
 function renderBandeja(tickets) {
   document.getElementById("refresh-ico").className = "";
   document.getElementById("refresh-ico").textContent = "⟳";
   document.getElementById("btn-refresh").disabled = false;
+  pendingTickets = tickets;
 
-  const list = document.getElementById("ticket-list");
   if (!tickets.length) {
-    list.innerHTML = '<div class="empty">Sin tickets pendientes</div>';
+    document.getElementById("bandeja-loading").style.display = "none";
+    document.getElementById("bandeja-items").style.display = "";
+    document.getElementById("bandeja-items").innerHTML =
+      '<div class="empty">Sin tickets pendientes</div>';
     return;
   }
-  list.innerHTML = tickets.map(t => {
+
+  // Mostrar spinner mientras se procesan
+  document.getElementById("bandeja-loading").style.display = "flex";
+  document.getElementById("bandeja-items").style.display = "none";
+  setBandejaDetail(`Procesando tickets en segundo plano…`);
+  checkBandejaReady();
+}
+
+function checkBandejaReady() {
+  if (!pendingTickets.length) return;
+  const done  = pendingTickets.filter(t => cacheStatus[t.id] === "done" || cacheStatus[t.id] === "error").length;
+  const total = pendingTickets.length;
+
+  // Actualizar texto de progreso
+  const loadingEl = document.getElementById("bandeja-loading");
+  if (loadingEl && loadingEl.style.display !== "none") {
+    setBandejaDetail(`${done} de ${total} ticket${total>1?"s":""} preparado${done!==1?"s":""}`);
+  }
+
+  if (done >= total) {
+    // Todos listos — mostrar bandeja
+    showBandejaItems();
+  }
+}
+
+function showBandejaItems() {
+  const items = document.getElementById("bandeja-items");
+  const loading = document.getElementById("bandeja-loading");
+  items.innerHTML = pendingTickets.map(t => {
     const st = cacheStatus[t.id] || "pending";
     return `<div class="ticket-item" data-id="${esc(t.id)}">
       <div style="display:flex;align-items:center;gap:6px">
@@ -512,9 +564,11 @@ function renderBandeja(tickets) {
       ${t.elementos ? `<div style="font-size:.68rem;color:var(--acc2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.elementos)}</div>` : ""}
     </div>`;
   }).join("");
-  list.querySelectorAll(".ticket-item").forEach(el => {
+  items.querySelectorAll(".ticket-item").forEach(el => {
     el.onclick = () => openTicket(el.dataset.id);
   });
+  loading.style.display = "none";
+  items.style.display = "";
 }
 
 function badgeIcon(status) {
@@ -528,6 +582,8 @@ function updateTicketBadge(ticketId, status) {
   cacheStatus[ticketId] = status;
   const el = document.getElementById("badge-" + ticketId);
   if (el) { el.dataset.status = status; el.innerHTML = badgeIcon(status); }
+  // Comprobar si ya están todos listos para mostrar la bandeja
+  checkBandejaReady();
 }
 
 // ── Abrir ticket ──────────────────────────────────────────────────────────
