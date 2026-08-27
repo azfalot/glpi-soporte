@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const path = require("path");
 const fs   = require("fs");
@@ -167,32 +167,37 @@ async function readTicket(ticketId) {
     await page.waitForTimeout(2000);
   }
 
-  return page.evaluate(() => {
+  return page.evaluate((targetId) => {
     const clean    = s => (s||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
     const cleanHtml = s => (s||"").replace(/\s+/g," ").trim();
     const ticketId = (document.title.match(/Tickets?\s*[#\-]?\s*(\d+)/i)||[])[1]
-                  || (location.href.match(/id=(\d+)/)||[])[1] || null;
+                  || (location.href.match(/id=(\d+)/)||[])[1]
+                  || targetId || null;
     const titleEl = document.querySelector(".navigationheader h3")
                  || document.querySelector(".navigationheader")
-                 || document.querySelector("h3.ticket_heading");
-    const title = cleanHtml(titleEl?.innerText || document.title || "");
-    const items = Array.from(document.querySelectorAll(".timeline_history .h_item"));
+                 || document.querySelector("h3.ticket_heading")
+                 || document.querySelector(".ticket_title")
+                 || document.querySelector("input[name='name']");
+    const title = cleanHtml(titleEl?.value || titleEl?.innerText || document.title || "");
+    const items = Array.from(document.querySelectorAll(
+      ".timeline_history .h_item, .itil-timeline-item, .timeline-item, .timeline_history .item, [id^='viewitem']"
+    ));
     const timeline = items.map(item => {
-      const dateEl = item.querySelector(".h_date");
+      const dateEl = item.querySelector(".h_date, .timeline-item-date, .date, [class*='date']");
       const date   = dateEl ? cleanHtml((dateEl.innerText||"").replace(/^\S+\s*/,"").trim()) : "";
-      const userEl = item.querySelector(".h_user_name a")||item.querySelector(".h_user_name");
+      const userEl = item.querySelector(".h_user_name a, .h_user_name, .user_name, .user, [class*='user']");
       const user   = cleanHtml(userEl?.innerText||"");
-      const contentEl = item.querySelector(".h_content");
-      const type = contentEl ? Array.from(contentEl.classList).find(c=>c!=="h_content")||"" : "";
-      const bodyEl = item.querySelector(".rich_text_container")||item.querySelector(".title")||item.querySelector(".displayed_content");
+      const contentEl = item.querySelector(".h_content, .timeline-item-content, .content");
+      const type = contentEl ? Array.from(contentEl.classList).find(c=>c!=="h_content"&&c!=="timeline-item-content")||"" : "";
+      const bodyEl = item.querySelector(".rich_text_container")||item.querySelector(".title")||item.querySelector(".displayed_content")||contentEl;
       const content = bodyEl ? clean(bodyEl.innerText) : "";
-      const attachments = Array.from(item.querySelectorAll("a[href*='document.send.php']"))
+      const attachments = Array.from(item.querySelectorAll("a[href*='document.send.php'], a[href*='document']"))
         .map(a => ({ label: cleanHtml(a.textContent||""), href: a.getAttribute("href")||"" }));
       return { date, user, type, content, attachments };
     }).filter(e => e.content.length>1 || e.attachments.length>0);
-    return { ticketId, title, timelineCount: timeline.length, timeline,
+    return { ticketId: String(ticketId), title, timelineCount: timeline.length, timeline,
              _debug: { url: location.href, h_items_raw: items.length } };
-  });
+  }, String(ticketId));
 }
 
 /** Devuelve la página activa SIN lanzar Firefox. Null si el contexto está cerrado. */

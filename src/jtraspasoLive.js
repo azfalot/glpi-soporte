@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 const path = require("path");
 const fs   = require("fs");
@@ -212,21 +212,27 @@ async function runQuery(sqlText, entorno) {
   }
 
   // 4. Esperar resultado de jTraspaso
-  // Detectamos que la query completó viendo que el <pre> de Oracle cambió
-  // (cada ejecución tiene un timestamp diferente en el banner SQL*Plus)
-  const prevPre = await page.evaluate(() => {
-    const pre = document.querySelector("pre");
-    return pre ? pre.innerText.substring(0, 80) : "";
+  const prevContent = await page.evaluate(() => {
+    const el = document.querySelector("[id*='salida'], [id*='output'], [id*='resultado'], textarea, pre");
+    return el ? (el.innerText || el.value || "").substring(0, 100) : "";
   }).catch(() => "");
 
   await page.waitForFunction(
     (prev) => {
-      const pre = document.querySelector("pre");
-      if (!pre) return false;
-      const cur = pre.innerText.substring(0, 80);
-      return cur !== prev && cur.includes("SQL*Plus");
+      const allEls = Array.from(document.querySelectorAll("textarea, div, td, pre, [id*='salida'], [id*='output'], [id*='resultado']"));
+      const salidaEl = allEls.find(el => {
+        const t = el.innerText || el.value || "";
+        return t.includes("SQL*Plus:") || t.includes("Oracle Database") ||
+               t.includes("IDDATOS") || t.includes("IDESTADO") || t.includes("CODSOLICITUD") ||
+               t.includes("resultados") || t.includes("IDPAGO") || t.includes("IDEVENTO") ||
+               t.includes("JSON_LEN") || t.includes("ORA-") || t.includes("no rows selected") ||
+               t.includes("filas seleccionadas");
+      });
+      if (!salidaEl) return false;
+      const cur = (salidaEl.innerText || salidaEl.value || "").substring(0, 100);
+      return cur.length > 0 && cur !== prev;
     },
-    prevPre,
+    prevContent,
     { timeout: 90000 }
   ).catch(() => {});
   await page.waitForTimeout(1500);
@@ -241,55 +247,72 @@ async function parseResult(page) {
     const result = { rows: [], rawOutput: "", sections: {}, error: null };
 
     // 1. Extraer el texto de la zona "Salida" de jTraspaso
-    // JSF: el id es algo como "trassqlplus:salida", "sqlForm:salida", etc.
-    // Buscar textarea o div que contenga "SQL*Plus:" o "Oracle Database"
-    const allEls = Array.from(document.querySelectorAll("textarea, div, td, pre"));
+    const allEls = Array.from(document.querySelectorAll("textarea, div, td, pre, [id*='salida'], [id*='output'], [id*='resultado']"));
     const salidaEl = allEls.find(el => {
       const t = el.innerText || el.value || "";
       return t.includes("SQL*Plus:") || t.includes("Oracle Database") ||
              t.includes("IDDATOS") || t.includes("IDESTADO") || t.includes("CODSOLICITUD") ||
-             t.includes("resultados") || t.includes("IDPAGO") || t.includes("IDEVENTO");
+             t.includes("resultados") || t.includes("IDPAGO") || t.includes("IDEVENTO") ||
+             t.includes("JSON_LEN");
     });
     const salidaText = salidaEl ? (salidaEl.innerText || salidaEl.value || "") : "";
-    result.rawOutput = salidaText.substring(0, 60000) || (document.body.innerText || "").substring(0, 60000);
+    result.rawOutput = salidaText.substring(0, 80000) || (document.body.innerText || "").substring(0, 80000);
 
-    // 2. Parsear resultados: formato pipe-separated (SET COLSEP ' | ')
-    const lines = result.rawOutput.split("\n").map(l => l.trim()).filter(Boolean);
-    // Encontrar línea de cabecera (contiene columnas conocidas o el primer "|")
-    let headerIdx = -1;
-    const knownCols = ["IDDATOS","IDESTADO","CODSOLICITUD","IDPAGO","CODESTADO","NIF","IMPORTE","IDEVENTO","FECEVENTO","DATOS","URLVUELTA","IDDESCOESTADO","RESPUESTA_PREVIEW","CODFORM"];
-    for (let i = 0; i < lines.length; i++) {
-      const upper = lines[i].toUpperCase();
-      if (knownCols.some(c => upper.includes(c)) && upper.includes("|")) {
-        headerIdx = i;
-        break;
-      }
-    }
-    if (headerIdx >= 0) {
-      const headers = lines[headerIdx].split("|").map(h => h.trim()).filter(Boolean);
-      for (let i = headerIdx + 1; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line.includes("|")) continue;
-        if (line.match(/^[-\s|]+$/)) continue; // línea separadora
-        const vals = line.split("|").map(v => v.trim());
-        const obj = {};
-        headers.forEach((h, idx) => { obj[h] = vals[idx] !== undefined ? vals[idx] : ""; });
-        result.rows.push(obj);
-      }
-    }
-
-    // 3. Parsear secciones PROMPT (==== 2) REVISION SOLICITUD ====, etc.)
+    // 2. Parsear secciones PROMPT (==== 2) REVISION SOLICITUD ====, etc.)
     const raw = result.rawOutput;
     const re  = /====\s*(.+?)\s*====/g;
     const positions = [];
     let m;
     while ((m = re.exec(raw)) !== null) {
-      positions.push({ title: m[1].trim(), end: m.index + m[0].length });
+      positions.push({ title: m[1].trim(), start: m.index, end: m.index + m[0].length });
     }
     for (let i = 0; i < positions.length; i++) {
       const start = positions[i].end;
-      const end   = i + 1 < positions.length ? positions[i+1].end - positions[i+1].title.length - 10 : raw.length;
+      const end   = i + 1 < positions.length ? positions[i+1].start : raw.length;
       result.sections[positions[i].title] = raw.substring(start, end).trim();
+    }
+
+    // Helper para parsear un bloque de tabla delimitado por pipes
+    function parsePipeText(text) {
+      const parsedRows = [];
+      const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+      let currentHeaders = null;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.match(/^[-\s|]+$/)) continue; // línea separadora ----
+        if (line.startsWith("==") || line.startsWith("SET ") || line.startsWith("PROMPT") || line.startsWith("DEFINE")) continue;
+        if (line.toLowerCase().includes("selected") || line.toLowerCase().includes("seleccionada") || line.includes("rows selected")) continue;
+
+        if (line.includes("|")) {
+          const parts = line.split("|").map(p => p.trim());
+          const looksLikeHeader = parts.filter(Boolean).length >= 2 &&
+            parts.some(p => /^(IDDATOS|IDESTADO|DATOS|CODSOLICITUD|IDPAGO|IDDESCOESTADO|CODESTADO|NIF|IMPORTE|URLVUELTA|IDEVENTO|FECEVENTO|RESPUESTA|RESPUESTA_PREVIEW|CODFORM|FECALTA|OWNER|TABLE_NAME|COLUMN_NAME|CONSTRAINT_NAME)/i.test(p));
+
+          if (looksLikeHeader) {
+            currentHeaders = parts.filter(Boolean);
+          } else if (currentHeaders) {
+            const obj = {};
+            currentHeaders.forEach((h, idx) => {
+              obj[h.toUpperCase()] = parts[idx] !== undefined ? parts[idx] : "";
+            });
+            if (Object.values(obj).some(v => v !== "")) {
+              parsedRows.push(obj);
+            }
+          }
+        }
+      }
+      return parsedRows;
+    }
+
+    // Parsear cada sección o todo el texto
+    if (Object.keys(result.sections).length > 0) {
+      for (const [secTitle, secContent] of Object.entries(result.sections)) {
+        const secRows = parsePipeText(secContent);
+        result.rows.push(...secRows);
+      }
+    } else {
+      result.rows = parsePipeText(raw);
     }
 
     // 4. Nº resultados desde el encabezado de jTraspaso
@@ -508,7 +531,7 @@ async function diagnoseFull(codsol, progress, entities) {
     // Buscar PPFDATOS en filas
     for (const row of (r1.rows || [])) {
       const keys = Object.keys(row).map(k => k.toUpperCase());
-      if (keys.includes("IDDATOS") || keys.includes("CODSOLICITUD")) {
+      if (keys.includes("IDDATOS") || (keys.includes("CODSOLICITUD") && !keys.includes("IDPAGO"))) {
         out.ppfdatos = row;
         iddatos = row.IDDATOS || row.iddatos;
         break;
@@ -517,7 +540,7 @@ async function diagnoseFull(codsol, progress, entities) {
     // Buscar PAGO
     for (const row of (r1.rows || [])) {
       const keys = Object.keys(row).map(k => k.toUpperCase());
-      if (keys.includes("IDPAGO") || keys.includes("CODESTADO")) {
+      if (keys.includes("IDPAGO") || keys.includes("CODESTADO") || keys.includes("IDDESCOESTADO")) {
         out.pago = row;
         break;
       }

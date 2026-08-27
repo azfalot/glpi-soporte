@@ -48,9 +48,12 @@ function proposeEnrichment(ticket, diagData) {
   const kbMatch   = diagData.kbMatches && diagData.kbMatches[0];
   const clobParsed = diagData.clobParsed || diagData.jtraspasoResult?.clobParsed || {};
 
-  const codsol = entities.codsol || null;
-  const proc   = extractProc(entities, clobParsed);
-  const modelo = extractModelo(entities, clobParsed);
+  const codsol = entities.codsol
+    || diagData.jtraspasoResult?.codsol
+    || (diagData.ppfdatos && (diagData.ppfdatos.CODSOLICITUD || diagData.ppfdatos.codsolicitud))
+    || null;
+  const proc   = extractProc(entities, clobParsed, diagData);
+  const modelo = extractModelo(entities, clobParsed, diagData);
   const app    = resolveApp(kbMatch);
 
   // Construir título propuesto
@@ -68,8 +71,10 @@ function proposeEnrichment(ticket, diagData) {
     elementos.push({ tipo: "Procedimientocarm", nombre: proc, label: `Procedimiento CARM: ${proc}` });
   }
 
+  const ticketId = ticket.ticketId || ticket.id || diagData.ticketId;
+
   return {
-    ticketId:      ticket.ticketId,
+    ticketId:      ticketId ? String(ticketId) : null,
     currentTitle,
     titleProposal,
     titleChanged,
@@ -87,7 +92,7 @@ function proposeEnrichment(ticket, diagData) {
 // ── Helpers de extracción ─────────────────────────────────────────────────
 
 /** Extrae el número de procedimiento de entidades y/o JSON CLOB */
-function extractProc(entities, clobParsed) {
+function extractProc(entities, clobParsed, diagData) {
   // 1. Del CLOB JSON (máxima fiabilidad)
   if (clobParsed) {
     const sol = clobParsed.solicitud;
@@ -95,12 +100,18 @@ function extractProc(entities, clobParsed) {
     if (clobParsed.codigoProcedimiento) return String(clobParsed.codigoProcedimiento);
   }
   // 2. De las entidades extraídas del ticket
-  if (entities.procedimiento) return entities.procedimiento;
+  if (entities.procedimiento) return String(entities.procedimiento);
+  // 3. De PPFDATOS
+  const ppf = diagData?.ppfdatos || diagData?.jtraspasoResult?.ppfdatos;
+  if (ppf && ppf.CODFORM) {
+    const m = String(ppf.CODFORM).match(/[FfMm]?(\d{3,6})/);
+    if (m) return m[1];
+  }
   return null;
 }
 
 /** Extrae el código de modelo (ej: "1197", "620", "600") */
-function extractModelo(entities, clobParsed) {
+function extractModelo(entities, clobParsed, diagData) {
   if (clobParsed) {
     // codForm: "F1197.V2" → "1197"
     if (clobParsed.codForm) {
@@ -109,7 +120,12 @@ function extractModelo(entities, clobParsed) {
     }
     if (clobParsed.solicitud?.proc) return String(clobParsed.solicitud.proc);
   }
-  if (entities.procedimiento) return entities.procedimiento;
+  if (entities.procedimiento) return String(entities.procedimiento);
+  const ppf = diagData?.ppfdatos || diagData?.jtraspasoResult?.ppfdatos;
+  if (ppf && ppf.CODFORM) {
+    const m = String(ppf.CODFORM).match(/[FfMm]?(\d{3,6})/);
+    if (m) return m[1];
+  }
   return null;
 }
 
@@ -122,11 +138,11 @@ function resolveApp(kbMatch) {
 
 /** Limpia el título actual eliminando prefijos ya procesados y redundancias */
 function cleanTicketTitle(title) {
-  return title
-    .replace(/^Ticket\s*[-–]\s*/i, "")          // "Ticket - "
-    .replace(/\[BUZON\]\s*/gi, "")               // [BUZON]
-    .replace(/\[\d{3,6}\]\s*/g, "")             // [1197] números de modelo
-    .replace(/\{[A-Za-z0-9]{6,40}\}\s*/g, "")  // {BtzRD5...} CODSOL
+  return (title || "")
+    .replace(/\[BUZON\]\s*/gi, "")
+    .replace(/\[\d{3,6}\]\s*/g, "")
+    .replace(/\{[A-Za-z0-9]{6,40}\}\s*/g, "")
+    .replace(/\bTicket\s*(?:#\d+)?\s*[-–:]\s*/gi, "")
     .replace(/\s+/g, " ")
     .trim();
 }

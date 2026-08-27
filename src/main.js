@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 try { require("dotenv").config(); } catch {}
 
@@ -6,6 +6,7 @@ const express = require("express");
 const path    = require("path");
 
 const glpi    = require("./glpiLive");
+const enrich  = require("./glpiEnrich");
 const extract = require("./extract");
 const classify = require("./classify");
 const kb      = require("./kb");
@@ -98,7 +99,7 @@ async function runTicketPipeline(ticketId, progress, keepOpen = false) {
       .concat((ticket.timeline || []).map(e => e.content || ""))
       .join(" ");
     const kbMatches = kb.kbSearch(fullText, 3);
-    const diagBase  = { entities, kbMatches, tramites: [], dbError: null };
+    const diagBase  = { ticketId, entities, kbMatches, tramites: [], dbError: null };
     cacheSet(ticketId, "diag", diagBase);
     queue.broadcast({ type: "diag:ready", ticketId, data: diagBase });
 

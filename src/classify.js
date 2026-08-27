@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 /**
  * Clasificacion de incidencias y generacion de borradores.
@@ -29,16 +29,32 @@ function classify(ticket, diagnoseResult) {
   };
 }
 
-function draftTask(ticket, entities, classification, tramites) {
+function draftTask(ticket, entities, classification, diagData) {
   const ts  = new Date().toLocaleString("es-ES", { timeZone: "Europe/Madrid" });
   const cat = classification.kbMatch.category;
-  const vars = buildVars(entities, tramites, ticket.ticketId);
+  const vars = buildVars(entities, diagData, ticket.ticketId);
 
-  const tramiteInfo = tramites.length
-    ? tramites.map(t =>
-        `  - CODSOL: ${t.codsol||"-"} | Estado: ${t.estado||"-"} | Fecha: ${t.fechaRegistro||"-"} | Proc: ${t.procedimiento||"-"}`
-      ).join("\n")
-    : "  (!) Sin registros encontrados en jTraspaso";
+  const ppf = diagData?.ppfdatos || (diagData?.jtraspasoResult && diagData.jtraspasoResult.ppfdatos);
+  const pago = diagData?.pago || (diagData?.jtraspasoResult && diagData.jtraspasoResult.pago);
+  const tramites = Array.isArray(diagData) ? diagData : (diagData?.tramites || []);
+
+  let tramiteInfo = "";
+  if (ppf || pago) {
+    const lines = [];
+    if (ppf) {
+      lines.push(`  - PPFDATOS: IDDATOS ${ppf.IDDATOS || ppf.iddatos || "-"} | IDESTADO: ${ppf.IDESTADO || ppf.idestado || "-"} | CODFORM: ${ppf.CODFORM || ppf.codform || "-"} | CODSOL: ${vars.CODSOL}`);
+    }
+    if (pago) {
+      lines.push(`  - PAGO: IDPAGO ${pago.IDPAGO || pago.idpago || "-"} | CODESTADO: ${pago.CODESTADO || pago.codestado || "-"} | IMPORTE: ${vars.IMPORTE} | N28: ${vars.N28}`);
+    }
+    tramiteInfo = lines.join("\n");
+  } else if (tramites.length) {
+    tramiteInfo = tramites.map(t =>
+      `  - CODSOL: ${t.codsol||"-"} | Estado: ${t.estado||"-"} | Fecha: ${t.fechaRegistro||"-"} | Proc: ${t.procedimiento||"-"}`
+    ).join("\n");
+  } else {
+    tramiteInfo = "  (!) Sin registros encontrados en jTraspaso";
+  }
 
   const tidSection = cat.tidExamples.length
     ? cat.tidExamples.map(id => `  - TID ${id}`).join("\n")
@@ -90,8 +106,8 @@ ACCIONES A REALIZAR:
     `  DNI/NIF   : ${entities.dnis.join(", ") || "-"}`,
     `  NIE       : ${entities.nies.join(", ") || "-"}`,
     `  Matricula : ${entities.matriculas.join(", ") || "-"}`,
-    `  CODSOL    : ${entities.codsol || "-"}`,
-    `  Proc.     : ${entities.procedimiento || "-"}`,
+    `  CODSOL    : ${vars.CODSOL !== "NNNNNNN" ? vars.CODSOL : (entities.codsol || "-")}`,
+    `  Proc.     : ${vars.PROC !== "1197" ? vars.PROC : (entities.procedimiento || "-")}`,
     `  Fecha ref.: ${entities.fecha || "-"}`,
     "",
     "RESULTADOS jTraspaso:",
@@ -105,16 +121,18 @@ ACCIONES A REALIZAR:
   ].join("\n").trim();
 }
 
-function draftFollowup(ticket, entities, classification, tramites) {
+function draftFollowup(ticket, entities, classification, diagData) {
   const cat = classification.kbMatch.category;
-  const vars = buildVars(entities, tramites, ticket.ticketId);
-  const tramiteRef = tramites.length ? tramites[0].codsol || tramites[0].idTramite : null;
-  const refText = tramiteRef ? `referencia ${tramiteRef}` : "su tramite";
+  const vars = buildVars(entities, diagData, ticket.ticketId);
+  const tramites = Array.isArray(diagData) ? diagData : (diagData?.tramites || []);
+  const tramiteRef = (vars.CODSOL && vars.CODSOL !== "NNNNNNN")
+    ? `referencia ${vars.CODSOL}`
+    : (tramites.length && (tramites[0].codsol || tramites[0].idTramite) ? `referencia ${tramites[0].codsol || tramites[0].idTramite}` : "su tramite");
 
   // AutoFirma global (incidencia masiva): plantilla pendiente/resuelta
   if (cat.id === "AUTOFIRMA_GLOBAL" && cat.followupTemplate) {
     // Si hay CODSOL y URL_PRESENTADOR, la incidencia se ha resuelto -> plantilla resuelta
-    if (vars.CODSOL && vars.CODSOL !== "NNNNN" && vars.URL_PRESENTADOR && !vars.URL_PRESENTADOR.includes("NNNNN")) {
+    if (vars.CODSOL && vars.CODSOL !== "NNNNNNN" && vars.URL_PRESENTADOR && !vars.URL_PRESENTADOR.includes("NNNNNNN") && !vars.URL_PRESENTADOR.includes("...")) {
       return fillTemplate(cat.followupTemplate.resuelta, vars);
     }
     return fillTemplate(cat.followupTemplate.pendiente, vars);
@@ -127,23 +145,23 @@ function draftFollowup(ticket, entities, classification, tramites) {
 
   let body = "";
   if (cat.id === "MODELO_620_ESTADO" || cat.id === "MODELO_620_JSON") {
-    body = `hemos recibido su incidencia relativa al Modelo 620 (${refText}). Estamos revisando el estado y los datos de la solicitud. Le informaremos en cuanto este resuelto.`;
+    body = `hemos recibido su incidencia relativa al Modelo 620 (${tramiteRef}). Estamos revisando el estado y los datos de la solicitud. Le informaremos en cuanto este resuelto.`;
   } else if (cat.id === "MODELO_600_JSON") {
-    body = `hemos recibido su incidencia relativa al Modelo 600 (${refText}). Estamos revisando los datos. Le contactaremos en breve.`;
+    body = `hemos recibido su incidencia relativa al Modelo 600 (${tramiteRef}). Estamos revisando los datos. Le contactaremos en breve.`;
   } else if (cat.id === "MODELO_651_JSON") {
-    body = `hemos recibido su incidencia relativa al Modelo 651 (${refText}). Le informaremos a la mayor brevedad.`;
+    body = `hemos recibido su incidencia relativa al Modelo 651 (${tramiteRef}). Le informaremos a la mayor brevedad.`;
   } else if (cat.id === "PASARELA_CCO" || cat.id === "PASARELA_FN" || cat.id === "PASARELA_PA") {
-    body = `hemos detectado una incidencia en el procesamiento del pago (${refText}). Estamos coordinando con la entidad bancaria para regularizar. Le notificaremos cuando el estado sea correcto.`;
+    body = `hemos detectado una incidencia en el procesamiento del pago (${tramiteRef}). Estamos coordinando con la entidad bancaria para regularizar. Le notificaremos cuando el estado sea correcto.`;
   } else if (cat.id === "IVTM_PERMISOS") {
     body = `hemos procesado su solicitud de acceso a la consulta de vehiculos (IVTM). Los permisos seran actualizados en breve.`;
   } else if (cat.id === "SIRA_NOTIFICACIONES") {
     body = `hemos recibido la incidencia del lote/correo indicado. Estamos revisando el error en el sistema de notificaciones.`;
   } else if (cat.id === "DOMI_PLAZOS") {
-    body = `hemos recibido la incidencia sobre la domiciliacion (${refText}). Estamos analizando plazos y cintas. Le notificaremos en cuanto se regularice.`;
+    body = `hemos recibido la incidencia sobre la domiciliacion (${tramiteRef}). Estamos analizando plazos y cintas. Le notificaremos en cuanto se regularice.`;
   } else if (cat.id === "PADRONES") {
     body = `hemos recibido la solicitud de actualizacion del padron. Procederemos a la correccion y le informaremos.`;
   } else {
-    body = `hemos recibido su incidencia y la estamos analizando. En breve le informaremos del estado de ${refText}.`;
+    body = `hemos recibido su incidencia y la estamos analizando. En breve le informaremos del estado de ${tramiteRef}.`;
   }
 
   return `Estimado/a ciudadano/a,
@@ -156,11 +174,11 @@ Atentamente,
 Servicio de Soporte Tecnico`.trim();
 }
 
-function buildDrafts(ticket, diagnoseResult) {
-  const { entities, tramites } = diagnoseResult;
+function buildDrafts(ticket, diagnoseResult = {}) {
+  const entities = diagnoseResult.entities || {};
   const classification = classify(ticket, diagnoseResult);
-  const task     = draftTask(ticket, entities, classification, tramites);
-  const followup = draftFollowup(ticket, entities, classification, tramites);
+  const task     = draftTask(ticket, entities, classification, diagnoseResult);
+  const followup = draftFollowup(ticket, entities, classification, diagnoseResult);
   return { classification, task, followup };
 }
 

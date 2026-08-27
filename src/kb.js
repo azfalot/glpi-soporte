@@ -653,31 +653,144 @@ function fillTemplate(template, vars = {}) {
 }
 
 /**
- * Construye el mapa de variables a partir de los datos extraídos del ticket.
+ * Construye el mapa de variables a partir de los datos extraídos del ticket y del diagnóstico de jTraspaso.
  */
-function buildVars(entities, tramites, ticketId) {
-  const t0 = tramites && tramites[0];
+function buildVars(entities = {}, diagData = {}, ticketId = null) {
+  const isArray = Array.isArray(diagData);
+  const tramites = isArray ? diagData : (diagData.tramites || []);
+  const t0 = tramites[0] || null;
+
+  const ppf = diagData.ppfdatos || (diagData.jtraspasoResult && diagData.jtraspasoResult.ppfdatos) || null;
+  const pago = diagData.pago || (diagData.jtraspasoResult && diagData.jtraspasoResult.pago) || null;
+  const clobParsed = diagData.clobParsed || (diagData.jtraspasoResult && diagData.jtraspasoResult.clobParsed) || null;
+  const rawOutput = (diagData.jtraspasoResult && diagData.jtraspasoResult.rawOutput) || diagData.rawOutput || "";
+
+  // CODSOL
+  const codsol = (entities && entities.codsol)
+    || (diagData.jtraspasoResult && diagData.jtraspasoResult.codsol)
+    || (ppf && (ppf.CODSOLICITUD || ppf.codsolicitud || ppf.CODSOL || ppf.codsol))
+    || (t0 && t0.codsol)
+    || (clobParsed && (clobParsed.solicitud?.codsol || clobParsed.codsolicitud))
+    || "NNNNNNN";
+
+  // IDDATOS
+  const iddatos = (ppf && (ppf.IDDATOS || ppf.iddatos))
+    || (t0 && (t0.idTramite || t0.iddatos || t0.IDDATOS))
+    || "NNNNNNN";
+
+  // DNI / NIF
+  const dni = (entities.dnis && entities.dnis[0])
+    || (entities.nies && entities.nies[0])
+    || (pago && (pago.NIF || pago.nif))
+    || (ppf && (ppf.DNISOLICITANTE || ppf.dnisolicitante))
+    || (clobParsed && (clobParsed.solicitud?.nif || clobParsed.persona?.nif || clobParsed.datospersonales?.nif))
+    || (t0 && t0.dniNie)
+    || "NNNNNNN";
+
+  // Matrícula
+  const matricula = (entities.matriculas && entities.matriculas[0])
+    || (clobParsed && (clobParsed.vehiculo?.matricula || clobParsed.datosvehiculo?.matricula))
+    || (ppf && (ppf.MATRICULA || ppf.matricula))
+    || (t0 && t0.matricula)
+    || "NNNNNNN";
+
+  // Procedimiento y Modelo
+  const proc = (entities && entities.procedimiento)
+    || (clobParsed && (clobParsed.solicitud?.proc || clobParsed.codigoProcedimiento))
+    || (ppf && ppf.CODFORM && String(ppf.CODFORM).replace(/^M/i, ""))
+    || (t0 && t0.procedimiento)
+    || "1197";
+
+  const modelo = (entities && entities.procedimiento)
+    || (clobParsed && clobParsed.codForm && String(clobParsed.codForm).match(/[FfMm]?(\d{3,6})/)?.[1])
+    || (ppf && ppf.CODFORM && String(ppf.CODFORM).replace(/^M/i, ""))
+    || "620";
+
+  // IDPAGO, CODESTADO e IMPORTE
+  const idPago = (pago && (pago.IDPAGO || pago.idpago)) || "NNNNNNN";
+  const importe = (pago && (pago.IMPORTE || pago.importe))
+    || (clobParsed && (clobParsed.pago?.importe || clobParsed.datospago?.importe))
+    || "0.00";
+
+  // N28 (28 dígitos)
+  let n28 = (pago && (pago.N28 || pago.n28)) || null;
+  if (!n28 && pago && (pago.URLVUELTA || pago.urlvuelta)) {
+    const m = String(pago.URLVUELTA || pago.urlvuelta).match(/\b(\d{28})\b/);
+    if (m) n28 = m[1];
+  }
+  if (!n28 && clobParsed) {
+    const m = JSON.stringify(clobParsed).match(/\b(\d{28})\b/);
+    if (m) n28 = m[1];
+  }
+  if (!n28 && rawOutput) {
+    const m = rawOutput.match(/\b(\d{28})\b/);
+    if (m) n28 = m[1];
+  }
+  if (!n28) n28 = "NNNNNNNNNNNNNNNNNNNNNNNNNNNN";
+
+  // GUID
+  let guid = null;
+  if (clobParsed) {
+    if (clobParsed.guid) guid = clobParsed.guid;
+    else if (clobParsed.solicitud?.guid) guid = clobParsed.solicitud.guid;
+    else {
+      const m = JSON.stringify(clobParsed).match(/ES_A14036665[^"'\s,}]+/);
+      if (m) guid = m[0];
+    }
+  }
+  if (!guid && rawOutput) {
+    const m = rawOutput.match(/ES_A14036665[^"'\s,}]+/);
+    if (m) guid = m[0];
+  }
+  if (!guid) guid = "ES_A14036665_YYYY_DOCH...";
+
+  // URLs
+  const urlPresentador = `https://sede.carm.es/presentador?proc=${proc}&sol=${codsol}&dptotram=175&guid=${guid}`;
+  const urlDocs = `https://sede.carm.es/paetributos/formularios/URLOKTRIBUTOS?codForm=M${modelo}&proc=${proc}&sol=${codsol}&dptotram=175&guid=${guid}`;
+
+  // JSON CLOB Partes
+  let jsonParteA = "PEGAR_JSON_AQUI";
+  let jsonParteB = "";
+  if (clobParsed && !clobParsed._raw) {
+    const fullJsonStr = JSON.stringify(clobParsed);
+    if (fullJsonStr.length <= 32000) {
+      jsonParteA = fullJsonStr.replace(/'/g, "''");
+    } else {
+      jsonParteA = fullJsonStr.substring(0, 32000).replace(/'/g, "''");
+      jsonParteB = fullJsonStr.substring(32000).replace(/'/g, "''");
+    }
+  }
+
+  // Fecha
+  const fecha = (pago && (pago.FECESTADO || pago.fecestado))
+    || (ppf && (ppf.FECALTA || ppf.fecalta))
+    || (entities && entities.fecha)
+    || "DD/MM/YYYY";
+
+  // IDPETITPV
+  const idpetitpv = (pago && (pago.IDPETITPV || pago.idpetitpv)) || "NNNNNNN";
+
   return {
     GLPI:      ticketId || "NNNNNNN",
-    IDDATOS:   t0 ? (t0.idTramite || "NNNNNNN") : "NNNNNNN",
-    CODSOL:    entities.codsol  || (t0 && t0.codsol) || "NNNNNNN",
-    DNI:       entities.dnis[0] || entities.nies[0] || (t0 && t0.dniNie) || "NNNNNNN",
-    MATRICULA: entities.matriculas[0] || (t0 && t0.matricula) || "NNNNNNN",
+    IDDATOS:   String(iddatos),
+    CODSOL:    String(codsol),
+    DNI:       String(dni),
+    MATRICULA: String(matricula),
     // Pasarela
-    IDPETITPV: "NNNNNNN",
-    N28:       "NNNNNNNNNNNNNNNNNNNNNNNNNNNN",
-    IMPORTE:   "0.00",
-    FECHA:     "DD/MM/YYYY",
-    ENTIDAD:   "NNNN",
+    IDPETITPV: String(idpetitpv),
+    N28:       String(n28),
+    IMPORTE:   String(importe),
+    FECHA:     String(fecha),
+    ENTIDAD:   "3058",
     FRAGMENTO_CCO: "NNNNNNNNNNNNNN",
-    IDPAGO:    "NNNNNNN",
+    IDPAGO:    String(idPago),
     // AutoFirma / Presentador
-    PROC:      entities.procedimiento || "NNNNN",
+    PROC:      String(proc),
     DPTO:      "175",
-    GUID:      "ES_A14036665_YYYY_DOCH...",
-    MODELO:    entities.procedimiento || "620",
-    URL_PRESENTADOR: `https://sede.carm.es/presentador?proc=${entities.procedimiento||"NNNNN"}&sol=${entities.codsol||(t0&&t0.codsol)||"NNNNN"}&dptotram=175&guid=ES_A14036665_YYYY_DOCH...`,
-    URL_DOCS:  "https://sede.carm.es/...",
+    GUID:      String(guid),
+    MODELO:    String(modelo),
+    URL_PRESENTADOR: urlPresentador,
+    URL_DOCS:  urlDocs,
     // SIRA
     EJE_CORREO: new Date().getFullYear(),
     NUM_CORREO: "NNNNN",
@@ -691,8 +804,8 @@ function buildVars(entities, tramites, ticketId) {
     COD_MUNI:   "NNNNN",
     CONCEPTO:   "NNN",
     // JSON
-    JSON_PARTE_A: "PEGAR_JSON_AQUI",
-    JSON_PARTE_B: ""
+    JSON_PARTE_A: jsonParteA,
+    JSON_PARTE_B: jsonParteB
   };
 }
 
