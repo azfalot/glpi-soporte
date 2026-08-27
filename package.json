@@ -6,7 +6,8 @@
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
-    "dev": "node src/main.js"
+    "dev": "node src/main.js",
+    "test": "node tests/test-pipeline.js"
   },
   "engines": {
     "node": ">=20"

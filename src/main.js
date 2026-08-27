@@ -5,12 +5,11 @@ try { require("dotenv").config(); } catch {}
 const express = require("express");
 const path    = require("path");
 
-const glpi    = require("./glpiLive");
+const { glpi, jtras, getMode, setMode } = require("./adapters");
 const enrich  = require("./glpiEnrich");
 const extract = require("./extract");
 const classify = require("./classify");
 const kb      = require("./kb");
-const jtras   = require("./jtraspasoLive");
 const schema  = require("./schemaExplorer");
 const queue   = require("./jobQueue");
 const scraper = require("../scripts/scrapeJtraspaso");
@@ -19,6 +18,20 @@ const { killOrphanPlaywrightFirefox } = require("./ffKiller");
 const app = express();
 app.use(express.json({ limit: "4mb" }));
 app.use(express.static(path.join(__dirname, "..", "public")));
+
+// ── Modo de datos (mock / live) ──────────────────────────────────────────────
+app.get("/api/mode", (_req, res) => {
+  res.json({ mode: getMode(), isMock: getMode() === "mock" });
+});
+
+app.post("/api/mode", (req, res) => {
+  const { mode } = req.body || {};
+  if (mode === "mock" || mode === "live") {
+    setMode(mode);
+    return res.json({ ok: true, mode: getMode(), isMock: getMode() === "mock" });
+  }
+  res.status(400).json({ error: "Modo debe ser 'mock' o 'live'" });
+});
 
 // ── SSE — canal de eventos para la UI ───────────────────────────────────────
 app.get("/api/events", (req, res) => {

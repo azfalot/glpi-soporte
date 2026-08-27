@@ -1,0 +1,82 @@
+{
+  "BtzRD5JqSAlYjCgVg1c4": {
+    "codsol": "BtzRD5JqSAlYjCgVg1c4",
+    "ppfdatos": {
+      "IDDATOS": "8841201",
+      "IDESTADO": "5",
+      "CODFORM": "M1197",
+      "CODSOLICITUD": "BtzRD5JqSAlYjCgVg1c4",
+      "FECALTA": "27/08/26"
+    },
+    "pago": {
+      "IDPAGO": "554102",
+      "CODESTADO": "PA",
+      "IDDESCOESTADO": "Pagado",
+      "NIF": "23456789A",
+      "IMPORTE": "15.00",
+      "N28": "3058000000000000000000001234",
+      "FECESTADO": "27/08/2026"
+    },
+    "eventos": [
+      {
+        "IDEVENTO": "90112",
+        "FECEVENTO": "27/08/2026 10:14",
+        "RESPUESTA_PREVIEW": "ERROR_FIRMA: Certificado o formato de firma no soportado en front"
+      }
+    ],
+    "clobParsed": {
+      "codForm": "F1197.V2",
+      "guid": "ES_A14036665_2026_DOCH_8841201_XYZ",
+      "solicitud": {
+        "proc": "1197",
+        "codsol": "BtzRD5JqSAlYjCgVg1c4",
+        "nif": "23456789A"
+      },
+      "pago": {
+        "importe": "15.00",
+        "estado": "PAGADO",
+        "n28": "3058000000000000000000001234"
+      },
+      "vehiculo": {
+        "matricula": "1234XYZ"
+      }
+    }
+  },
+  "Trsp98KlmPqRtWvXyZ10": {
+    "codsol": "Trsp98KlmPqRtWvXyZ10",
+    "ppfdatos": {
+      "IDDATOS": "8841999",
+      "IDESTADO": "5",
+      "CODFORM": "M620",
+      "CODSOLICITUD": "Trsp98KlmPqRtWvXyZ10",
+      "FECALTA": "27/08/26"
+    },
+    "pago": {
+      "IDPAGO": "554988",
+      "CODESTADO": "PA",
+      "IDDESCOESTADO": "Pagado",
+      "NIF": "48001122B",
+      "IMPORTE": "54.20",
+      "N28": "3058000000000000000000005678",
+      "FECESTADO": "27/08/2026"
+    },
+    "eventos": [],
+    "clobParsed": {
+      "codForm": "F620.V1",
+      "guid": "ES_A14036665_2026_DOCH_8841999_620",
+      "solicitud": {
+        "proc": "620",
+        "codsol": "Trsp98KlmPqRtWvXyZ10",
+        "nif": "48001122B"
+      },
+      "pago": {
+        "importe": "54.20",
+        "estado": "PAGADO",
+        "n28": "3058000000000000000000005678"
+      },
+      "vehiculo": {
+        "matricula": "5678JKL"
+      }
+    }
+  }
+}

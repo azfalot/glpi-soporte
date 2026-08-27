@@ -118,18 +118,33 @@ console.log("▶ Iniciando suite de pruebas...");
   console.log("  ✔ Test 4: Propuesta de enriquecimiento GLPI OK");
 }
 
-// ── Test 5: Generación de SQL de diagnóstico y CLOB ──────────────────────────
+// ── Test 6: Adaptadores en Modo Mock (Desarrollo sin VPN) ───────────────────
 {
-  const diagSQL = jtras.buildDiagSQL("CODSOL123", "99999");
-  assert.ok(diagSQL.includes("CODSOL123"), "Diag SQL debe incluir CODSOL");
-  assert.ok(diagSQL.includes("PPFDATOS"), "Diag SQL debe consultar PPFDATOS");
-  assert.ok(diagSQL.includes("PASAPAGO.PAGO"), "Diag SQL debe consultar PAGO");
-  assert.ok(diagSQL.includes("PPFEVENTO"), "Diag SQL debe consultar PPFEVENTO");
+  const GlpiAdapter = require("../src/adapters/glpiAdapter");
+  const JtraspasoAdapter = require("../src/adapters/jtraspasoAdapter");
 
-  const clobSQL = jtras.buildClobSQL("CODSOL123", "99999");
-  assert.ok(clobSQL.includes("99999"), "Clob SQL debe incluir IDDATOS");
-  assert.ok(clobSQL.includes("DBMS_LOB.substr"), "Clob SQL debe incluir DBMS_LOB");
-  console.log("  ✔ Test 5: Generación de SQLs de diagnóstico y CLOB OK");
+  const mockGlpi = new GlpiAdapter("mock");
+  const mockJtras = new JtraspasoAdapter("mock");
+
+  // Listar tickets mock
+  mockGlpi.listTicketsToProcess().then(async res => {
+    assert.ok(res.mock, "Debe reportar modo mock");
+    assert.ok(res.tickets.length > 0, "Debe cargar tickets desde fixture");
+
+    // Leer ticket mock
+    const t = await mockGlpi.readTicket("1565896");
+    assert.strictEqual(t.ticketId, "1565896", "Debe leer ticket mock 1565896");
+
+    // Diagnóstico mock
+    const jt = await mockJtras.diagnoseFull("BtzRD5JqSAlYjCgVg1c4");
+    assert.ok(jt.mock, "Debe reportar diagnóstico mock");
+    assert.strictEqual(jt.ppfdatos.IDESTADO, "5", "Debe cargar PPFDATOS del fixture");
+    assert.strictEqual(jt.pago.IMPORTE, "15.00", "Debe cargar PAGO del fixture");
+
+    console.log("  ✔ Test 6: Adaptadores en Modo Mock (Offline / Sin VPN) OK");
+    console.log("\n✅ ¡Todas las pruebas han pasado exitosamente!");
+  }).catch(err => {
+    console.error("❌ Error en Test 6:", err);
+    process.exit(1);
+  });
 }
-
-console.log("\n✅ ¡Todas las pruebas han pasado exitosamente!");

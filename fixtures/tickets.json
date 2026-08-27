@@ -1,0 +1,60 @@
+{
+  "tickets": [
+    {
+      "id": "1565896",
+      "title": "[BUZON] [1197] {BtzRD5JqSAlYjCgVg1c4} Incidencia técnica en firma electrónica Autofirma",
+      "elementos": "PAETRIBUTOS",
+      "timeline": [
+        {
+          "date": "2026-08-27 10:15",
+          "user": "Ciudadano Solicitante",
+          "type": "description",
+          "content": "Buenos días. Al intentar firmar la presentación del procedimiento 1197 con Autofirma me sale error de que la firma electrónica no es válida. Mi DNI es 23456789A y la matrícula asociada es 1234XYZ.",
+          "attachments": []
+        }
+      ]
+    },
+    {
+      "id": "1559652",
+      "title": "[BUZON] [620] {Trsp98KlmPqRtWvXyZ10} Modelo 620 pagado pendiente de presentación",
+      "elementos": "PAETRIBUTOS",
+      "timeline": [
+        {
+          "date": "2026-08-27 11:30",
+          "user": "Ciudadano Solicitante",
+          "type": "description",
+          "content": "He realizado el pago con tarjeta en la pasarela pero se cerró la ventana del navegador antes de poder firmar y descargar el justificante del modelo 620. DNI 48001122B, matrícula 5678JKL.",
+          "attachments": []
+        }
+      ]
+    },
+    {
+      "id": "1547561",
+      "title": "[BUZON] Pago retenido en pasarela con tarjeta Cajamar",
+      "elementos": "PASARELAPAGO",
+      "timeline": [
+        {
+          "date": "2026-08-27 12:00",
+          "user": "CAU Soporte",
+          "type": "description",
+          "content": "El contribuyente indica cobro en cuenta bancaria pero no actualizado en pasarela. N28 Cajamar: 3058000123456789012345678901, DNI 77889900C.",
+          "attachments": []
+        }
+      ]
+    },
+    {
+      "id": "1558612",
+      "title": "Error en envío de notificación SIRA lote 2026",
+      "elementos": "PAEARECA",
+      "timeline": [
+        {
+          "date": "2026-08-27 13:10",
+          "user": "Operador SIRA",
+          "type": "description",
+          "content": "Fallo en FRIOPETI / FRIOERROR para el lote de notificaciones electrónicas. Eje correo 2026, número de correo 12450.",
+          "attachments": []
+        }
+      ]
+    }
+  ]
+}
