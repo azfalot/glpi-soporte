@@ -29,7 +29,8 @@ async function getPage() {
   if (_ctx && _page && !_page.isClosed()) return _page;
   unlockProfile(PROFILE);
   _ctx = await firefox.launchPersistentContext(PROFILE, {
-    headless: false,
+    headless: true,
+    args: ["--headless"],
     viewport: { width: 1440, height: 900 },
     ignoreHTTPSErrors: true,
     firefoxUserPrefs: FF_PREFS
@@ -409,9 +410,42 @@ function buildClobSQL(codsol, iddatos) {
   ].join("\n");
 }
 
+// ── SQL búsqueda por token (fallback cuando no hay CODSOL) ───────────────────
+
+/**
+ * Construye SQL para buscar CODSOLICITUD por DNI u otro token + fecha.
+ * La fecha debe venir en formato MM/YY (ej: "08/26" para agosto 2026).
+ */
+function buildTokenSearchSQL(token, fechaMM_YY) {
+  const lines = [
+    "SET PAGESIZE 50000",
+    "SET LINESIZE 32767",
+    "SET LONG 2000000",
+    "SET COLSEP ' | '",
+    "SET FEEDBACK ON",
+    "SET HEADING ON",
+    "",
+    "-- Búsqueda por token (DNI / matrícula) y fecha aproximada",
+    "SELECT IDDATOS, CODSOLICITUD, IDESTADO, FECALTA",
+    "FROM PPFDATOS",
+    "WHERE DATOS LIKE '%" + token.replace(/'/g, "''") + "%'"
+  ];
+  if (fechaMM_YY) {
+    lines.push("  AND FECALTA LIKE '%" + fechaMM_YY.replace(/'/g, "''") + "%'");
+  }
+  lines.push("ORDER BY FECALTA DESC;");
+  return lines.join("\n");
+}
+
 // ── Diagnostico de alto nivel ─────────────────────────────────────────────
 
-async function diagnoseFull(codsol, progress) {
+/**
+ * diagnoseFull — acepta codsol directo O entidades del ticket para fallback.
+ * @param {string}   codsol     CODSOL conocido (o null)
+ * @param {Function} progress   callback (step, detail)
+ * @param {object}   entities   { dnis, nies, matriculas, fecha } para fallback
+ */
+async function diagnoseFull(codsol, progress, entities) {
   progress = progress || (() => {});
   const out = {
     codsol,
@@ -421,9 +455,49 @@ async function diagnoseFull(codsol, progress) {
     clobRaw:    null,
     clobParsed: null,
     errors:     [],
-    rawOutput:  ""
+    rawOutput:  "",
+    tokenSearch: null   // resultado de búsqueda por token si no había CODSOL
   };
 
+  // ── FASE 0: si no hay CODSOL, buscar por DNI/matrícula + fecha ───────────
+  if (!codsol && entities) {
+    const token = (entities.dnis && entities.dnis[0])
+               || (entities.nies && entities.nies[0])
+               || (entities.matriculas && entities.matriculas[0]);
+    if (token) {
+      // Convertir fecha ISO (2026-08-15) → "08/26" para el LIKE
+      let fechaMM_YY = null;
+      if (entities.fecha) {
+        const parts = entities.fecha.split("-"); // [2026, 08, 15]
+        if (parts.length === 3) {
+          const yy = parts[0].slice(2); // "26"
+          fechaMM_YY = parts[1] + "/" + yy; // "08/26"
+        }
+      }
+      progress("token-search", `Buscando CODSOL por token: ${token}${fechaMM_YY ? " fecha: " + fechaMM_YY : ""}...`);
+      try {
+        const r0 = await runQuery(buildTokenSearchSQL(token, fechaMM_YY));
+        out.rawOutput = r0.rawOutput;
+        out.tokenSearch = r0.rows || [];
+        // Tomar el primer CODSOLICITUD encontrado
+        if (r0.rows && r0.rows.length > 0) {
+          const first = r0.rows[0];
+          const foundCodsol = first.CODSOLICITUD || first.codsolicitud;
+          if (foundCodsol) {
+            codsol = foundCodsol;
+            out.codsol = codsol;
+          }
+        }
+      } catch (e) {
+        out.errors.push("Fase 0 (token search): " + e.message);
+      }
+    }
+  }
+
+  if (!codsol) {
+    out.errors.push("Sin CODSOL: no se puede continuar el diagnóstico.");
+    return out;
+  }
   // FASE 1: revision general
   progress("sql1", "Ejecutando diagnostico inicial en jTraspaso...");
   let iddatos = null;
@@ -507,6 +581,7 @@ module.exports = {
   diagnoseFull,
   buildDiagSQL,
   buildClobSQL,
+  buildTokenSearchSQL,
   parseResult
 };
 

@@ -348,7 +348,7 @@ function handleEvent(ev) {
     case "jtraspaso:skip":
       if (ev.ticketId !== state.ticketId) break;
       setStep("jtras", "done");
-      setProgress("ℹ jTraspaso: sin CODSOL. Generando borradores…");
+      setProgress("ℹ jTraspaso: sin datos identificativos. Generando borradores…");
       setSection("sec-jtras", renderJtrasSkip(ev.reason));
       break;
 
@@ -631,11 +631,13 @@ function renderJtraspaso(r, codsol) {
   const ppf   = r.ppfdatos;
   const pago  = r.pago;
   const errs  = r.errors || [];
+  const resolvedCodsol = r.codsol || codsol || "—";
 
   const idestado  = ppf ? parseInt(ppf.IDESTADO || ppf.idestado || "0") : null;
   const codestado = pago ? (pago.CODESTADO || pago.codestado || "") : null;
   const estadoClr = idestado === 5 ? "p-yellow" : idestado ? "p-green" : "p-red";
 
+  // Buscar GUID en el CLOB o en rawOutput
   let guid = null, urlPresentador = null;
   if (r.clobParsed) {
     const gm = JSON.stringify(r.clobParsed).match(/ES_A14036665[^"'\s,}]+/);
@@ -647,47 +649,94 @@ function renderJtraspaso(r, codsol) {
   }
   if (guid && ppf) {
     const proc = (ppf.CODFORM || ppf.codform || "").replace(/^M/,"") || "1197";
-    urlPresentador = `https://sede.carm.es/presentador?proc=${proc}&sol=${codsol}&dptotram=175&guid=${guid}`;
+    urlPresentador = `https://sede.carm.es/presentador?proc=${proc}&sol=${resolvedCodsol}&dptotram=175&guid=${guid}`;
   }
 
   let body = "";
+
+  // Alerta si se resolvió por token (fallback)
+  if (r.tokenSearch && r.tokenSearch.length > 0 && (!codsol)) {
+    body += `<div class="alert a-info" style="margin-bottom:12px">
+      🔍 CODSOL no extraído del ticket — encontrado por búsqueda de token:
+      <strong>${esc(resolvedCodsol)}</strong>
+    </div>`;
+  }
+  if (r.tokenSearch && r.tokenSearch.length > 1) {
+    body += `<details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:.73rem;color:var(--txt2)">
+      🔍 ${r.tokenSearch.length} candidatos encontrados por token</summary>
+      <table style="width:100%;border-collapse:collapse;font-size:.72rem;margin-top:6px">
+        <thead><tr>
+          <th style="padding:3px 6px;background:var(--bg3);color:var(--txt2)">IDDATOS</th>
+          <th style="padding:3px 6px;background:var(--bg3);color:var(--txt2)">CODSOLICITUD</th>
+          <th style="padding:3px 6px;background:var(--bg3);color:var(--txt2)">IDESTADO</th>
+          <th style="padding:3px 6px;background:var(--bg3);color:var(--txt2)">FECALTA</th>
+        </tr></thead>
+        <tbody>${r.tokenSearch.map(row=>`<tr>
+          <td style="padding:3px 6px;border-bottom:1px solid var(--bg3)">${esc(row.IDDATOS||row.iddatos||"")}</td>
+          <td style="padding:3px 6px;border-bottom:1px solid var(--bg3)"><code style="font-size:.68rem">${esc(row.CODSOLICITUD||row.codsolicitud||"")}</code></td>
+          <td style="padding:3px 6px;border-bottom:1px solid var(--bg3)">${esc(row.IDESTADO||row.idestado||"")}</td>
+          <td style="padding:3px 6px;border-bottom:1px solid var(--bg3)">${esc(row.FECALTA||row.fecalta||"")}</td>
+        </tr>`).join("")}</tbody>
+      </table></details>`;
+  }
+
   if (errs.length) body += `<div class="alert a-warn" style="margin-bottom:10px">${errs.map(esc).join("<br>")}</div>`;
 
-  body += `<div class="jtras-row">
-    <div>
-      <div style="font-size:.7rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:6px">PPFDATOS</div>
-      ${ppf ? `<dl class="kv">
-        <dt>IDDATOS</dt><dd>${esc(ppf.IDDATOS||ppf.iddatos||"—")}</dd>
-        <dt>IDESTADO</dt><dd><span class="pill ${estadoClr}">${esc(ppf.IDESTADO||ppf.idestado||"—")}</span>
-          ${idestado===5 ? '<span style="color:var(--warn);font-size:.7rem"> ⚠ Presentación pendiente</span>' : ""}</dd>
-        <dt>CODFORM</dt><dd>${esc(ppf.CODFORM||ppf.codform||"—")}</dd>
-        <dt>GUID</dt><dd><code style="font-size:.7rem">${esc(guid||"— (ver CLOB)")}</code></dd>
-      </dl>` : `<div class="alert a-warn">Sin datos en PPFDATOS</div>`}
-    </div>
-    <div>
-      <div style="font-size:.7rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:6px">PAGO</div>
-      ${pago ? `<dl class="kv">
-        <dt>CODESTADO</dt><dd><span class="pill ${codestado==='PA'?'p-green':codestado==='FN'?'p-yellow':'p-red'}">${esc(codestado||"—")}</span></dd>
-        <dt>IMPORTE</dt><dd>${esc(pago.IMPORTE||pago.importe||"—")}</dd>
-        <dt>NIF</dt><dd>${esc(pago.NIF||pago.nif||"—")}</dd>
-        <dt>IDPAGO</dt><dd>${esc(pago.IDPAGO||pago.idpago||"—")}</dd>
-      </dl>` : `<div class="alert a-warn">Sin datos de PAGO</div>`}
-    </div>
-  </div>`;
+  // ── Datos de Solicitud ────────────────────────────────────────────────
+  body += `<div style="font-size:.72rem;font-weight:700;color:var(--txt2);text-transform:uppercase;
+                       letter-spacing:.04em;margin-bottom:8px">📋 Datos de Solicitud</div>`;
+  if (ppf) {
+    body += `<dl class="kv" style="margin-bottom:14px">
+      <dt>CODSOLICITUD</dt><dd><code style="font-size:.78rem">${esc(resolvedCodsol)}</code></dd>
+      <dt>IDDATOS</dt><dd>${esc(ppf.IDDATOS||ppf.iddatos||"—")}</dd>
+      <dt>IDESTADO</dt><dd>
+        <span class="pill ${estadoClr}">${esc(ppf.IDESTADO||ppf.idestado||"—")}</span>
+        ${idestado===5 ? '<span style="color:var(--warn);font-size:.7rem"> ⚠ Presentación pendiente</span>' : ""}
+        ${idestado===6 ? '<span style="color:var(--ok);font-size:.7rem"> ✓ Completada</span>' : ""}
+      </dd>
+      <dt>CODFORM</dt><dd>${esc(ppf.CODFORM||ppf.codform||"—")}</dd>
+      <dt>GUID</dt><dd><code style="font-size:.7rem;word-break:break-all">${esc(guid||"— (ver JSON)")}</code></dd>
+    </dl>`;
+  } else {
+    body += `<div class="alert a-warn" style="margin-bottom:14px">Sin datos en PPFDATOS para este CODSOL</div>`;
+  }
 
+  // ── Datos de Pago ─────────────────────────────────────────────────────
+  body += `<div style="font-size:.72rem;font-weight:700;color:var(--txt2);text-transform:uppercase;
+                       letter-spacing:.04em;margin-bottom:8px">💳 Datos de Pago</div>`;
+  if (pago) {
+    const pagoOk = codestado === "PA";
+    const pagoPend = codestado === "FN" || codestado === "PE";
+    body += `<dl class="kv" style="margin-bottom:14px">
+      <dt>CODESTADO</dt><dd>
+        <span class="pill ${pagoOk?'p-green':pagoPend?'p-yellow':'p-red'}">${esc(codestado||"—")}</span>
+        ${pagoOk ? '<span style="color:var(--ok);font-size:.7rem"> ✓ Pagado</span>' : ""}
+        ${pagoPend ? '<span style="color:var(--warn);font-size:.7rem"> ⚠ Pendiente</span>' : ""}
+      </dd>
+      <dt>IMPORTE</dt><dd><strong>${esc(pago.IMPORTE||pago.importe||"—")}</strong></dd>
+      <dt>NIF</dt><dd>${esc(pago.NIF||pago.nif||"—")}</dd>
+      <dt>IDPAGO</dt><dd>${esc(pago.IDPAGO||pago.idpago||"—")}</dd>
+      <dt>DESC. ESTADO</dt><dd>${esc(pago.IDDESCOESTADO||pago.iddescoestado||"—")}</dd>
+    </dl>`;
+  } else {
+    body += `<div class="alert a-warn" style="margin-bottom:14px">Sin datos de pago encontrados</div>`;
+  }
+
+  // ── URL Presentador ───────────────────────────────────────────────────
   if (urlPresentador) {
-    body += `<div class="url-box">
+    body += `<div class="url-box" style="margin-bottom:14px">
       <div class="url-label">✅ URL Presentador lista</div>
       <a href="${esc(urlPresentador)}" target="_blank">${esc(urlPresentador)}</a>
       <button class="btn btn-ghost" style="margin-top:6px;font-size:.72rem"
-        onclick="navigator.clipboard.writeText('${urlPresentador.replace(/'/g,"\\'")}').then(()=>this.textContent='✓ Copiada!')">
+        onclick="navigator.clipboard.writeText(${JSON.stringify(urlPresentador)}).then(()=>this.textContent='✓ Copiada!').catch(()=>{})">
         📋 Copiar URL
       </button>
     </div>`;
   }
 
+  // ── Eventos ───────────────────────────────────────────────────────────
   if (r.eventos && r.eventos.length) {
-    body += `<details style="margin-top:10px">
+    body += `<details style="margin-bottom:10px">
       <summary style="cursor:pointer;font-size:.75rem;color:var(--txt2)">📋 Eventos (${r.eventos.length})</summary>
       <table style="width:100%;border-collapse:collapse;font-size:.73rem;margin-top:6px">
         <thead><tr>
@@ -696,30 +745,105 @@ function renderJtraspaso(r, codsol) {
           <th style="text-align:left;padding:4px 8px;background:var(--bg3);color:var(--txt2)">RESPUESTA</th>
         </tr></thead>
         <tbody>${r.eventos.map(ev=>`<tr>
-          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3)">${esc(ev.IDEVENTO||"")}</td>
-          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3)">${esc(ev.FECEVENTO||"")}</td>
-          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3);font-size:.68rem">${esc((ev.RESPUESTA_PREVIEW||"").substring(0,120))}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3)">${esc(ev.IDEVENTO||ev.idevento||"")}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3)">${esc(ev.FECEVENTO||ev.fecevento||"")}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3);font-size:.68rem">${esc((ev.RESPUESTA_PREVIEW||ev.respuesta_preview||"").substring(0,150))}</td>
         </tr>`).join("")}</tbody>
       </table>
     </details>`;
   }
-  if (r.clobRaw) {
-    body += `<details style="margin-top:10px">
-      <summary style="cursor:pointer;font-size:.75rem;color:var(--txt2)">📄 CLOB DATOS</summary>
-      <pre style="font-size:.68rem;max-height:250px;overflow-y:auto;background:var(--bg);padding:10px;border-radius:6px;margin-top:6px;white-space:pre-wrap">${esc(r.clobRaw.substring(0,5000))}</pre>
+
+  // ── JSON del CLOB — amigable + bruto ──────────────────────────────────
+  if (r.clobParsed || r.clobRaw) {
+    const parsed = r.clobParsed;
+    let friendlyHtml = "";
+    if (parsed && typeof parsed === "object" && !parsed._raw) {
+      // Extraer campos de interés del JSON de la solicitud
+      const sol  = parsed.solicitud || {};
+      const pag  = parsed.pago || parsed.datospago || {};
+      const pers = parsed.persona || parsed.datospersonales || {};
+      const veh  = parsed.vehiculo || parsed.datosvehiculo || {};
+      friendlyHtml = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px">`;
+      if (Object.keys(sol).length) {
+        friendlyHtml += `<div><div style="font-size:.68rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:4px">Solicitud</div>
+          <dl class="kv">${Object.entries(sol).map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("")}</dl></div>`;
+      }
+      if (Object.keys(pag).length) {
+        friendlyHtml += `<div><div style="font-size:.68rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:4px">Pago (JSON)</div>
+          <dl class="kv">${Object.entries(pag).map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("")}</dl></div>`;
+      }
+      if (Object.keys(pers).length) {
+        friendlyHtml += `<div><div style="font-size:.68rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:4px">Persona</div>
+          <dl class="kv">${Object.entries(pers).map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("")}</dl></div>`;
+      }
+      if (Object.keys(veh).length) {
+        friendlyHtml += `<div><div style="font-size:.68rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:4px">Vehículo</div>
+          <dl class="kv">${Object.entries(veh).map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(String(v))}</dd>`).join("")}</dl></div>`;
+      }
+      friendlyHtml += `</div>`;
+    }
+
+    const rawStr = r.clobRaw
+      ? r.clobRaw.substring(0, 8000)
+      : (r.clobParsed ? JSON.stringify(r.clobParsed, null, 2).substring(0, 8000) : "");
+
+    const prettyStr = r.clobParsed && !r.clobParsed._raw
+      ? JSON.stringify(r.clobParsed, null, 2).substring(0, 8000)
+      : rawStr;
+
+    body += `<details style="margin-top:4px" open>
+      <summary style="cursor:pointer;font-size:.75rem;color:var(--txt2)">📄 JSON Solicitud</summary>
+      <div style="margin-top:10px">
+        ${friendlyHtml ? `<div style="margin-bottom:10px">${friendlyHtml}</div>` : ""}
+        <div style="display:flex;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+          <button class="btn btn-ghost" style="font-size:.7rem"
+            onclick="copyTextContent('json-pretty-${resolvedCodsol.substring(0,10)}')">📋 Copiar JSON</button>
+        </div>
+        <div style="display:flex;gap:6px;font-size:.7rem;color:var(--txt2);margin-bottom:6px">
+          <button onclick="toggleJsonView(this)" data-mode="pretty"
+            style="background:var(--acc);color:#fff;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.7rem">
+            Formateado</button>
+          <button onclick="toggleJsonView(this)" data-mode="raw"
+            style="background:var(--bg3);color:var(--txt2);border:none;border-radius:4px;padding:2px 8px;cursor:pointer;font-size:.7rem">
+            Bruto</button>
+        </div>
+        <pre id="json-pretty-${esc(resolvedCodsol.substring(0,10))}" class="json-view"
+          style="font-size:.68rem;max-height:320px;overflow-y:auto;background:var(--bg);
+                 padding:10px;border-radius:6px;white-space:pre-wrap;word-break:break-all"
+          data-pretty=${JSON.stringify(prettyStr)} data-raw=${JSON.stringify(rawStr)}>${esc(prettyStr)}</pre>
+      </div>
     </details>`;
   }
 
   const badge = ppf
-    ? `IDESTADO ${esc(ppf.IDESTADO||ppf.idestado||"?")} · ${pago ? esc(codestado||"?") : "sin pago"}`
-    : "sin datos";
+    ? `IDESTADO ${esc(String(ppf.IDESTADO||ppf.idestado||"?"))} · ${pago ? esc(codestado||"?") : "sin pago"}`
+    : (r.tokenSearch && r.tokenSearch.length ? `${r.tokenSearch.length} candidatos` : "sin datos");
 
-  setSection("sec-jtras", colCard("sec-jtras-inner", `🗄 jTraspaso — ${esc(codsol)}`, body, false, badge));
+  setSection("sec-jtras", colCard("sec-jtras-inner", `🗄 jTraspaso — ${esc(resolvedCodsol)}`, body, true, badge));
+}
+
+function toggleJsonView(btn) {
+  const mode = btn.dataset.mode;
+  const container = btn.closest("details");
+  const pre = container.querySelector(".json-view");
+  if (!pre) return;
+  pre.textContent = mode === "raw" ? pre.dataset.raw : pre.dataset.pretty;
+  container.querySelectorAll("button[data-mode]").forEach(b => {
+    b.style.background = b.dataset.mode === mode ? "var(--acc)" : "var(--bg3)";
+    b.style.color      = b.dataset.mode === mode ? "#fff"       : "var(--txt2)";
+  });
+}
+
+function copyTextContent(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent || el.innerText || "")
+    .catch(() => {});
 }
 
 function renderJtrasSkip(reason) {
   return colCard("sec-jtras-inner", "🗄 jTraspaso",
-    `<div class="alert a-info">${esc(reason)}</div>`, false, "sin CODSOL");
+    `<div class="alert a-info">${esc(reason)}</div>`, false, "sin datos identificativos");
 }
 
 // ── Render borradores — ABIERTOS por defecto ──────────────────────────────

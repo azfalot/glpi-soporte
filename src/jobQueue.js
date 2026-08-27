@@ -27,6 +27,7 @@ class JobQueue extends EventEmitter {
     this._sseClients = new Set(); // res objects de SSE
     this._running = 0;
     this._concurrency = 2;
+    this._lastTickets = null;   // último evento tickets:ready para replay
   }
 
   // ── SSE ────────────────────────────────────────────────────────────────
@@ -42,6 +43,11 @@ class JobQueue extends EventEmitter {
     res.write("retry: 3000\n\n");
     this._sseClients.add(res);
 
+    // Replay del último estado de bandeja si ya está disponible
+    if (this._lastTickets) {
+      try { res.write("data: " + JSON.stringify(this._lastTickets) + "\n\n"); } catch (_) {}
+    }
+
     // Heartbeat cada 20s
     const hb = setInterval(() => {
       try { res.write(": ping\n\n"); } catch (_) {}
@@ -55,6 +61,9 @@ class JobQueue extends EventEmitter {
 
   /** Emite evento SSE a todos los clientes conectados */
   broadcast(event) {
+    // Cachear último estado de bandeja para replay
+    if (event.type === "tickets:ready") this._lastTickets = event;
+
     const data = "data: " + JSON.stringify(event) + "\n\n";
     for (const res of this._sseClients) {
       try { res.write(data); } catch (_) { this._sseClients.delete(res); }

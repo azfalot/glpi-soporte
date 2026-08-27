@@ -70,22 +70,27 @@ app.post("/api/ticket/process", async (req, res) => {
       queue.broadcast({ type: "diag:ready", ticketId, data: diagBase });
 
       // ── PASO 3: Consultar jTraspaso ──────────────────────────────────
-      const codsol = entities.codsol;
-      if (codsol) {
-        progress("jtraspaso", `Consultando jTraspaso para CODSOL ${codsol}...`);
+      const codsol = entities.codsol || null;
+      if (codsol || entities.dnis.length || entities.nies.length || entities.matriculas.length) {
+        const label = codsol ? `CODSOL ${codsol}` : `token (${entities.dnis[0] || entities.nies[0] || entities.matriculas[0]})`;
+        progress("jtraspaso", `Consultando jTraspaso — ${label}...`);
         try {
-          const jtResult = await jtras.diagnoseFull(codsol);
-          queue.broadcast({ type: "jtraspaso:ready", ticketId, codsol, data: jtResult });
+          const jtResult = await jtras.diagnoseFull(codsol, null, entities);
+          queue.broadcast({ type: "jtraspaso:ready", ticketId, codsol: jtResult.codsol, data: jtResult });
           diagBase.jtraspasoResult = jtResult;
           diagBase.ppfdatos  = jtResult.ppfdatos;
           diagBase.pago      = jtResult.pago;
           diagBase.eventos   = jtResult.eventos;
           diagBase.clobParsed = jtResult.clobParsed;
+          // Actualizar codsol si se encontró por token
+          if (jtResult.codsol && !codsol) {
+            entities.codsol = jtResult.codsol;
+          }
         } catch (e) {
           queue.broadcast({ type: "jtraspaso:error", ticketId, error: e.message });
         }
       } else {
-        queue.broadcast({ type: "jtraspaso:skip", ticketId, reason: "Sin CODSOL extraído del ticket" });
+        queue.broadcast({ type: "jtraspaso:skip", ticketId, reason: "Sin datos identificativos en el ticket (CODSOL, DNI, matrícula)" });
       }
 
       // ── PASO 4: Generar borradores ───────────────────────────────────
