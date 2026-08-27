@@ -1,0 +1,360 @@
+﻿"use strict";
+
+try { require("dotenv").config(); } catch {}
+
+const express = require("express");
+const path    = require("path");
+
+const glpi    = require("./glpiLive");
+const extract = require("./extract");
+const classify = require("./classify");
+const kb      = require("./kb");
+const jtras   = require("./jtraspasoLive");
+const schema  = require("./schemaExplorer");
+const queue   = require("./jobQueue");
+const scraper = require("../scripts/scrapeJtraspaso");
+const { killOrphanPlaywrightFirefox } = require("./ffKiller");
+
+const app = express();
+app.use(express.json({ limit: "4mb" }));
+app.use(express.static(path.join(__dirname, "..", "public")));
+
+// ── SSE — canal de eventos para la UI ───────────────────────────────────────
+app.get("/api/events", (req, res) => {
+  queue.addClient(res);
+});
+
+app.get("/api/jobs", (_req, res) => {
+  res.json(queue.list());
+});
+
+// ── Pipeline automático de ticket ────────────────────────────────────────────
+//
+// Al abrir un ticket la UI llama POST /api/ticket/process
+// El servidor lanza en background:
+//   1. readTicket (GLPI)          → SSE ticket:ready
+//   2. diagnose (extract + KB)    → SSE diag:ready
+//   3. jTraspaso diagnoseFull     → SSE jtraspaso:ready
+//   4. buildDrafts                → SSE draft:ready
+//
+// La UI solo muestra lo que va llegando por SSE.
+
+app.post("/api/ticket/process", async (req, res) => {
+  const { ticketId } = req.body || {};
+  if (!ticketId) return res.status(400).json({ error: "ticketId requerido" });
+
+  // Responder inmediatamente — el trabajo ocurre en background vía SSE
+  res.json({ ok: true, ticketId, message: "Procesando en background..." });
+
+  queue.run(`ticket-${ticketId}`, `Leyendo ticket #${ticketId}`, async (progress) => {
+    try {
+      // ── PASO 1: Leer ticket de GLPI ──────────────────────────────────
+      progress("glpi", "Leyendo ticket de GLPI...");
+      let ticket;
+      try {
+        ticket = await glpi.readTicket(ticketId);
+      } catch (e) {
+        queue.broadcast({ type: "ticket:error", ticketId, error: e.message });
+        throw e;
+      }
+      queue.broadcast({ type: "ticket:ready", ticketId, data: ticket });
+
+      // ── PASO 2: Extraer entidades + clasificar KB ────────────────────
+      progress("extract", "Extrayendo datos y clasificando...");
+      const entities  = extract.extractEntities(ticket);
+      const fullText  = [ticket.title || ""]
+        .concat((ticket.timeline || []).map(e => e.content || ""))
+        .join(" ");
+      const kbMatches = kb.kbSearch(fullText, 3);
+      const diagBase = { entities, kbMatches, tramites: [], dbError: null };
+      queue.broadcast({ type: "diag:ready", ticketId, data: diagBase });
+
+      // ── PASO 3: Consultar jTraspaso ──────────────────────────────────
+      const codsol = entities.codsol;
+      if (codsol) {
+        progress("jtraspaso", `Consultando jTraspaso para CODSOL ${codsol}...`);
+        try {
+          const jtResult = await jtras.diagnoseFull(codsol);
+          queue.broadcast({ type: "jtraspaso:ready", ticketId, codsol, data: jtResult });
+          diagBase.jtraspasoResult = jtResult;
+          diagBase.ppfdatos  = jtResult.ppfdatos;
+          diagBase.pago      = jtResult.pago;
+          diagBase.eventos   = jtResult.eventos;
+          diagBase.clobParsed = jtResult.clobParsed;
+        } catch (e) {
+          queue.broadcast({ type: "jtraspaso:error", ticketId, error: e.message });
+        }
+      } else {
+        queue.broadcast({ type: "jtraspaso:skip", ticketId, reason: "Sin CODSOL extraído del ticket" });
+      }
+
+      // ── PASO 4: Generar borradores ───────────────────────────────────
+      progress("drafts", "Generando borradores TAREA y SEGUIMIENTO...");
+      const drafts = classify.buildDrafts(ticket, diagBase);
+      queue.broadcast({ type: "draft:ready", ticketId, data: drafts });
+
+      // ── PASO 5: Propuesta de enriquecimiento GLPI ────────────────────
+      progress("enrich", "Generando propuesta de enriquecimiento...");
+      const proposal = enrich.proposeEnrichment(ticket, diagBase);
+      queue.broadcast({ type: "enrich:proposal", ticketId, data: proposal });
+
+      return { ticketId, done: true };
+
+    } finally {
+      // SIEMPRE cerrar Firefox al terminar el job (éxito O error)
+      setImmediate(async () => {
+        await glpi.closeContext().catch(() => {});
+        await jtras.closeContext().catch(() => {});
+      });
+    }
+  });
+});
+
+// ── GLPI Enriquecimiento ─────────────────────────────────────────────────────
+
+/**
+ * Aplica la propuesta de enriquecimiento en GLPI.
+ * REQUIERE confirmación explícita del usuario (llamada manual desde la UI).
+ * ⚠️ Solo se ejecuta cuando el usuario pulsa "Confirmar y aplicar en GLPI".
+ */
+app.post("/api/glpi/enrich/apply", async (req, res) => {
+  const { proposal } = req.body || {};
+  if (!proposal || !proposal.ticketId) {
+    return res.status(400).json({ error: "Se requiere la propuesta (proposal)" });
+  }
+  try {
+    const result = await enrich.applyEnrichment(proposal);
+    queue.broadcast({ type: "enrich:applied", ticketId: proposal.ticketId, data: result });
+    setImmediate(() => glpi.closeContext().catch(() => {}));
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GLPI — listar tickets ────────────────────────────────────────────────────
+app.post("/api/tickets/load", async (_req, res) => {
+  try {
+    res.json({ ok: true, message: "Cargando bandeja..." });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Carga real de tickets en background
+app.post("/api/tickets/refresh", (_req, res) => {
+  res.json({ ok: true });
+  queue.run("load-tickets", "Cargando bandeja GLPI", async (progress) => {
+    try {
+      progress("glpi", "Conectando con GLPI...");
+      const result = await glpi.listTicketsToProcess();
+      queue.broadcast({ type: "tickets:ready", data: result });
+      return result;
+    } finally {
+      setImmediate(() => glpi.closeContext().catch(() => {}));
+    }
+  });
+});
+
+// ── Schema Explorer (background) ─────────────────────────────────────────────
+app.get("/api/schema/status", (_req, res) => {
+  const cached = scraper.loadAppStructure();
+  res.json({
+    hasAppStructure: !!cached,
+    scrapedAt:       cached ? cached.scrapedAt : null,
+    entornos:        cached ? cached.summary.entornos : [],
+    schemaEntornos:  schema.listCachedEntornos()
+  });
+});
+
+app.post("/api/schema/scrape", (_req, res) => {
+  res.json({ ok: true, message: "Scraping en background..." });
+  queue.run("scrape-jtraspaso", "Explorando estructura de jTraspaso", async (progress) => {
+    const page = await jtras.getPage();
+    await jtras.ensureJTraspaso(page);
+    return scraper.scrapeApp(page, progress);
+  });
+});
+
+app.post("/api/schema/discover", async (req, res) => {
+  const { entorno = "OVCONTRI PRODUCCION", force = false } = req.body || {};
+  res.json({ ok: true, message: `Discovery de esquema en background para ${entorno}...` });
+  queue.run(
+    `schema-${entorno}`,
+    `Discovery esquema: ${entorno}`,
+    async (progress) => schema.discoverSchema(jtras.runQuery, entorno, { force, progress })
+  );
+});
+
+app.get("/api/schema/search", (req, res) => {
+  const { entorno = "OVCONTRI PRODUCCION", q } = req.query;
+  if (!q) return res.status(400).json({ error: "q requerido" });
+  res.json(schema.searchSchema(entorno, q));
+});
+
+// ── jTraspaso — query directa (para debug / técnico) ─────────────────────────
+app.post("/api/jtraspaso/query", async (req, res) => {
+  const { sql, entorno } = req.body || {};
+  if (!sql) return res.status(400).json({ error: "Campo sql requerido" });
+  try {
+    const r = await jtras.runQuery(sql, entorno);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── KB ────────────────────────────────────────────────────────────────────────
+app.get("/api/kb/categories", (_req, res) => {
+  res.json(kb.kbCategories().map(c => ({
+    id: c.id, label: c.label, area: c.area, ambito: c.ambito, priority: c.priority
+  })));
+});
+
+app.get("/api/kb/search", (req, res) => {
+  const q = String(req.query.q || "");
+  if (!q) return res.status(400).json({ error: "q requerido" });
+  res.json(kb.kbSearch(q, 5));
+});
+
+// ── Health + debug ────────────────────────────────────────────────────────────
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// Estado del browser GLPI — NO lanza Firefox si no está ya abierto
+app.get("/api/glpi/status", async (_req, res) => {
+  try {
+    // Solo consultar si hay contexto activo — no lanzar Firefox
+    const page = glpi.getActivePage();
+    if (!page) return res.json({ url: null, needsAuth: false, isReady: false, idle: true });
+    const url   = page.url();
+    const title = await page.title().catch(() => "");
+    const needsAuth = url.includes("pase.carm.es") || url.includes("/login");
+    res.json({ url, title, needsAuth, isReady: url.includes("/front/") });
+  } catch (e) {
+    res.json({ url: null, error: e.message, needsAuth: false, idle: true });
+  }
+});
+
+// Inspeccionar la página actual del browser jTraspaso (entorno seleccionado, zona Salida)
+app.get("/api/jtraspaso/inspect", async (_req, res) => {
+  try {
+    const page = await jtras.getPage();
+    const info = await page.evaluate(() => {
+      // Entorno seleccionado
+      const envSel = Array.from(document.querySelectorAll("select")).find(s =>
+        Array.from(s.options).some(o => o.text.match(/OVCONTRI|PRODUCCION|ARECA/i))
+      );
+      // Zonas con contenido relevante
+      const salidas = Array.from(document.querySelectorAll("td,div,textarea,pre,span"))
+        .filter(el => {
+          const t = (el.innerText||el.value||"").trim();
+          return t.length > 20 && (
+            t.includes("resultados") || t.includes("SQL*Plus") ||
+            t.includes("IDDATOS") || t.includes("Oracle") || t.includes("petici")
+          );
+        }).map(el => ({
+          tag: el.tagName, id: el.id, cls: el.className.substring(0,40),
+          text: (el.innerText||el.value||"").substring(0,300),
+          htmlLen: (el.innerHTML||"").length
+        })).slice(0, 8);
+      // HTML completo del area de salida si existe
+      const salidaEl = Array.from(document.querySelectorAll("[id*='salida'],[id*='output'],[id*='resultado']")).pop();
+      return {
+        url: location.href,
+        entorno: envSel ? { id: envSel.id, value: envSel.value, text: envSel.options[envSel.selectedIndex]?.text } : null,
+        salidas,
+        salidaHtml: salidaEl ? salidaEl.innerHTML.substring(0, 2000) : null
+      };
+    });
+    res.json({ ok: true, ...info });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Inspeccionar la página actual del browser GLPI
+app.get("/api/glpi/inspect", async (_req, res) => {
+  try {
+    const page = await glpi.getPage();
+    const info = await page.evaluate(() => ({
+      url:   location.href,
+      title: document.title,
+      elements: Array.from(document.querySelectorAll("a,button,input[type=submit],input[type=button],input[name='_eventId']"))
+        .map(e => ({
+          tag: e.tagName, id: e.id, name: e.name||"",
+          value: (e.value||e.textContent||"").trim().substring(0,80),
+          href: e.href||"", type: e.type||""
+        })).slice(0, 40),
+      forms: Array.from(document.querySelectorAll("form")).map(f => ({
+        id: f.id, action: f.action, method: f.method,
+        inputs: Array.from(f.querySelectorAll("input,select,button")).map(i => ({
+          tag: i.tagName, name: i.name, id: i.id, type: i.type||"", value: (i.value||"").substring(0,60)
+        }))
+      }))
+    }));
+    res.json(info);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Intentar hacer clic en el botón de certificado del PASE
+app.post("/api/glpi/click-cert", async (_req, res) => {
+  try {
+    const page = await glpi.getPage();
+    const url = page.url();
+    if (!url.includes("pase.carm.es")) {
+      return res.json({ ok: true, message: "No estamos en PASE — ya autenticado o en otra página", url });
+    }
+    // Buscar el botón/enlace de acceso con certificado en PASE
+    const clicked = await page.evaluate(() => {
+      // PASE tiene un form con hidden input _eventId=accesoConclave
+      const certForm = Array.from(document.querySelectorAll("form")).find(f =>
+        Array.from(f.querySelectorAll("input[name='_eventId']"))
+          .some(i => i.value === "accesoConclave")
+      );
+      if (certForm) {
+        // Buscar el botón submit de ese form
+        const btn = certForm.querySelector("input[type=submit], button[type=submit], button");
+        if (btn) { btn.click(); return { clicked: "form submit", value: (btn.value||btn.textContent||"").trim() }; }
+        certForm.submit();
+        return { clicked: "form.submit()", value: "" };
+      }
+      // Buscar link directo de certificado
+      const links = Array.from(document.querySelectorAll("a")).filter(a =>
+        (a.textContent||"").match(/certificado|Certificado|conclave|Conclave/i) ||
+        (a.href||"").match(/certificado|conclave/i)
+      );
+      if (links[0]) { links[0].click(); return { clicked: "link", value: links[0].textContent.trim().substring(0,60) }; }
+      // Fallback: todos los links y botones
+      const all = Array.from(document.querySelectorAll("a[href],button,input[type=submit]"))
+        .map(e => ({ text: (e.textContent||e.value||"").trim().substring(0,60), href: e.href||"" }));
+      return { clicked: null, available: all.slice(0,20) };
+    });
+    if (clicked.clicked) {
+      await page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(2000);
+      res.json({ ok: true, ...clicked, newUrl: page.url(), newTitle: await page.title() });
+    } else {
+      res.json({ ok: false, message: "No se encontró botón de certificado", ...clicked });
+    }
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Arranque ──────────────────────────────────────────────────────────────────
+const PORT = Number(process.env.PORT || 8788);
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`Soporte LIVE → http://127.0.0.1:${PORT}`);
+
+  // Cargar bandeja automáticamente al arrancar
+  queue.run("load-tickets-startup", "Cargando bandeja GLPI al iniciar", async (progress) => {
+    try {
+      progress("glpi", "Conectando con GLPI...");
+      const result = await glpi.listTicketsToProcess();
+      queue.broadcast({ type: "tickets:ready", data: result });
+      return result;
+    } finally {
+      setImmediate(() => glpi.closeContext().catch(() => {}));
+    }
+  });
+});

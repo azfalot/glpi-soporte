@@ -1,0 +1,13 @@
+﻿node_modules/
+.env
+.profile-glpi/
+.profile-glpi-ff/
+.profile-jtras/
+.profile-jtras-ff/
+schema-cache/
+srv.log
+srv.err
+*.log
+*.err
+
+.cert/

@@ -1,0 +1,829 @@
+﻿<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Soporte Incidencias LIVE</title>
+<style>
+:root{
+  --bg:#0f172a;--bg2:#1e293b;--bg3:#334155;--bg4:#475569;
+  --acc:#3b82f6;--acc2:#60a5fa;
+  --ok:#22c55e;--warn:#f59e0b;--err:#ef4444;--purple:#a78bfa;
+  --txt:#e2e8f0;--txt2:#94a3b8;
+  --r:8px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--txt);
+     display:flex;flex-direction:column;height:100vh;overflow:hidden}
+
+/* ── Top bar ── */
+.topbar{background:var(--bg2);border-bottom:1px solid var(--bg3);
+        padding:10px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0}
+.topbar h1{font-size:1rem;font-weight:700;color:var(--acc2);flex:1}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--bg4);display:inline-block}
+.status-dot.ok{background:var(--ok)}
+.status-dot.running{background:var(--warn);animation:pulse 1s infinite}
+.status-dot.err{background:var(--err)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.topbar-badge{font-size:.72rem;color:var(--txt2);display:flex;align-items:center;gap:5px}
+
+/* ── Layout ── */
+.layout{display:grid;grid-template-columns:300px 1fr;flex:1;overflow:hidden;min-height:0}
+.sidebar{background:var(--bg2);border-right:1px solid var(--bg3);
+         display:flex;flex-direction:column;overflow:hidden}
+.main{display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Bandeja ── */
+.sidebar-head{padding:12px 14px 10px;border-bottom:1px solid var(--bg3);flex-shrink:0}
+.sidebar-head h2{font-size:.8rem;font-weight:700;color:var(--txt2);text-transform:uppercase;
+                 letter-spacing:.06em;margin-bottom:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;
+     border-radius:var(--r);border:none;cursor:pointer;font-size:.8rem;
+     font-weight:600;transition:opacity .15s}
+.btn:disabled{opacity:.4;cursor:default}
+.btn-primary{background:var(--acc);color:#fff}
+.btn-primary:hover:not(:disabled){background:var(--acc2)}
+.btn-ghost{background:var(--bg3);color:var(--txt)}
+.btn-ghost:hover:not(:disabled){background:var(--bg4)}
+.input-row{display:flex;gap:6px;margin-top:6px}
+.input-row input{flex:1;background:var(--bg3);border:1px solid var(--bg4);
+                 border-radius:6px;padding:5px 8px;color:var(--txt);font-size:.8rem;min-width:0}
+.ticket-list{overflow-y:auto;flex:1}
+.ticket-item{padding:10px 14px;border-bottom:1px solid var(--bg3);cursor:pointer;
+             transition:background .12s;position:relative}
+.ticket-item:hover{background:var(--bg3)}
+.ticket-item.active{background:#1e3a5f;border-left:3px solid var(--acc)}
+.ticket-item .tid{font-size:.68rem;color:var(--acc2);font-weight:700}
+.ticket-item .ttitle{font-size:.78rem;margin-top:2px;
+                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ticket-item .tstate{position:absolute;right:10px;top:50%;transform:translateY(-50%);
+                     width:8px;height:8px;border-radius:50%}
+
+/* ── Main area ── */
+.empty{display:flex;align-items:center;justify-content:center;
+       color:var(--txt2);font-size:.85rem;text-align:center;padding:40px;flex:1}
+
+/* ── Ticket view ── */
+.ticket-view{display:none;flex-direction:column;flex:1;overflow:hidden}
+.ticket-view.active{display:flex}
+
+/* Cabecera del ticket */
+.ticket-header{padding:16px 20px 12px;border-bottom:1px solid var(--bg3);flex-shrink:0}
+.ticket-header h2{font-size:.95rem;font-weight:700;margin-bottom:6px}
+.ticket-header .meta{display:flex;gap:12px;flex-wrap:wrap}
+.meta-item{font-size:.73rem;color:var(--txt2)}
+.meta-item strong{color:var(--txt)}
+
+/* Progreso de pasos */
+.steps{display:flex;gap:0;border-bottom:1px solid var(--bg3);flex-shrink:0;overflow-x:auto}
+.step{padding:8px 16px;font-size:.75rem;font-weight:600;color:var(--txt2);
+      border-bottom:2px solid transparent;white-space:nowrap;display:flex;align-items:center;gap:6px}
+.step.done{color:var(--ok);border-bottom-color:var(--ok)}
+.step.running{color:var(--warn);border-bottom-color:var(--warn)}
+.step.err{color:var(--err);border-bottom-color:var(--err)}
+
+/* Contenido principal scrollable */
+.content{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+
+/* ── Cards colapsables ── */
+.card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--r)}
+.card details{width:100%}
+.card details > summary{
+  list-style:none;padding:9px 14px;border-bottom:1px solid var(--bg3);cursor:pointer;
+  font-size:.73rem;font-weight:700;color:var(--txt2);text-transform:uppercase;
+  letter-spacing:.05em;display:flex;align-items:center;gap:8px;user-select:none;
+  transition:background .12s;
+}
+.card details > summary:hover{background:var(--bg3)}
+.card details > summary::-webkit-details-marker{display:none}
+.card details > summary::before{
+  content:"▶";font-size:.6rem;color:var(--txt2);transition:transform .2s;flex-shrink:0
+}
+.card details[open] > summary::before{transform:rotate(90deg)}
+.card details > summary .sum-right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.card-head{padding:9px 14px;border-bottom:1px solid var(--bg3);
+           font-size:.73rem;font-weight:700;color:var(--txt2);text-transform:uppercase;
+           letter-spacing:.05em;display:flex;align-items:center;gap:8px}
+.card-head .copy-btn{margin-left:auto;font-size:.7rem;padding:3px 10px}
+.card-body{padding:14px}
+
+/* ── KV ── */
+.kv{display:grid;grid-template-columns:130px 1fr;gap:4px 10px;font-size:.8rem}
+.kv dt{color:var(--txt2);padding-top:1px}
+.kv dd{color:var(--txt)}
+
+/* ── Timeline ── */
+.tl-entry{border-left:2px solid var(--bg3);padding:7px 0 7px 12px;margin-bottom:8px}
+.tl-meta{font-size:.68rem;color:var(--txt2);margin-bottom:3px}
+.tl-body{font-size:.78rem;line-height:1.55;white-space:pre-wrap;word-break:break-word}
+.tl-att{font-size:.7rem;color:var(--acc2);margin-top:4px}
+
+/* ── Pills ── */
+.pill{display:inline-block;padding:2px 7px;border-radius:99px;font-size:.68rem;font-weight:700;margin:1px}
+.p-blue{background:#1e3a5f;color:var(--acc2)}
+.p-green{background:#166534;color:var(--ok)}
+.p-yellow{background:#78350f;color:var(--warn)}
+.p-red{background:#7f1d1d;color:var(--err)}
+.p-purple{background:#3b0764;color:var(--purple)}
+
+/* ── Draft textarea ── */
+.draft-box{width:100%;background:var(--bg);color:var(--txt);
+           border:1px solid var(--bg3);border-radius:var(--r);
+           padding:12px;font-family:"Cascadia Code","Consolas",monospace;
+           font-size:.78rem;line-height:1.6;resize:vertical;min-height:220px}
+
+/* ── Skeleton loader ── */
+.skel{background:linear-gradient(90deg,var(--bg3) 25%,var(--bg4) 50%,var(--bg3) 75%);
+      background-size:200% 100%;animation:skel 1.4s infinite;
+      border-radius:4px;height:14px;margin-bottom:8px}
+@keyframes skel{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* ── Spinner ── */
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--bg3);
+      border-top-color:var(--acc);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Alerts ── */
+.alert{padding:9px 12px;border-radius:var(--r);font-size:.78rem;margin-bottom:8px}
+.a-warn{background:#78350f33;border:1px solid var(--warn);color:var(--warn)}
+.a-ok{background:#16653433;border:1px solid var(--ok);color:var(--ok)}
+.a-err{background:#7f1d1d33;border:1px solid var(--err);color:var(--err)}
+.a-info{background:#1e3a5f33;border:1px solid var(--acc);color:var(--acc2)}
+
+/* ── Clasificación highlight ── */
+.clasif-banner{border-radius:var(--r);padding:12px 16px;margin-bottom:0;
+               display:flex;align-items:center;gap:12px}
+.clasif-banner.alta{background:#7f1d1d33;border:1px solid var(--err)}
+.clasif-banner.media{background:#78350f33;border:1px solid var(--warn)}
+.clasif-banner.baja{background:#1e3a5f33;border:1px solid var(--acc)}
+.clasif-banner .cat-label{font-size:.85rem;font-weight:700}
+.clasif-banner .cat-conf{font-size:.72rem;color:var(--txt2);margin-top:2px}
+
+/* ── jTraspaso resultado inline ── */
+.jtras-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:700px){.jtras-row{grid-template-columns:1fr}}
+.url-box{background:var(--bg);border:1px solid var(--ok);border-radius:var(--r);
+         padding:10px 12px;margin-top:10px}
+.url-box .url-label{font-size:.68rem;color:var(--ok);font-weight:700;margin-bottom:4px}
+.url-box a{font-size:.75rem;word-break:break-all;color:var(--acc2)}
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <h1>🔧 Soporte Incidencias LIVE</h1>
+  <div class="topbar-badge" id="badge-glpi">
+    <span class="status-dot" id="dot-glpi"></span> GLPI
+  </div>
+  <div class="topbar-badge" id="badge-jtras">
+    <span class="status-dot" id="dot-jtras"></span> jTraspaso
+  </div>
+  <div id="bg-status" style="font-size:.7rem;color:var(--txt2)"></div>
+</div>
+
+<!-- Layout -->
+<div class="layout">
+
+  <!-- Bandeja -->
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h2 style="margin:0">Bandeja de tickets</h2>
+        <button class="btn btn-ghost" id="btn-refresh" title="Recargar bandeja" style="padding:4px 8px;font-size:.8rem">
+          <span id="refresh-ico">⟳</span>
+        </button>
+      </div>
+      <div class="input-row">
+        <input id="manual-id" placeholder="Buscar por ID…" type="number"/>
+        <button class="btn btn-ghost" id="btn-manual">→</button>
+      </div>
+    </div>
+    <div class="ticket-list" id="ticket-list">
+      <div class="empty" style="flex-direction:column;gap:8px;padding:30px 14px">
+        <span class="spin"></span><div style="margin-top:8px">Cargando bandeja…</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Panel derecho -->
+  <div class="main">
+    <div class="empty" id="no-ticket">Selecciona un ticket de la bandeja</div>
+
+    <div class="ticket-view" id="ticket-view">
+
+      <!-- Cabecera -->
+      <div class="ticket-header">
+        <h2 id="tv-title">—</h2>
+        <div class="meta">
+          <div class="meta-item">Ticket <strong id="tv-id">—</strong></div>
+          <div class="meta-item" id="tv-proc-wrap" style="display:none">Proc. <strong id="tv-proc">—</strong></div>
+          <div class="meta-item" id="tv-codsol-wrap" style="display:none">CODSOL <strong id="tv-codsol">—</strong></div>
+          <div class="meta-item" id="tv-dni-wrap" style="display:none">DNI/NIE <strong id="tv-dni">—</strong></div>
+        </div>
+      </div>
+
+      <!-- Barra de progreso de pasos -->
+      <div class="steps">
+        <div class="step" id="step-glpi">📥 Leyendo ticket</div>
+        <div class="step" id="step-extract">🔎 Clasificando</div>
+        <div class="step" id="step-jtras">🗄 jTraspaso</div>
+        <div class="step" id="step-draft">📝 Borradores</div>
+        <div class="step" id="step-enrich">✏️ GLPI</div>
+      </div>
+
+      <!-- Banner de progreso activo (desaparece cuando todo está done) -->
+      <div id="progress-banner" style="display:none;background:var(--bg2);border-bottom:1px solid var(--bg3);
+           padding:8px 20px;font-size:.78rem;color:var(--txt2);display:flex;align-items:center;gap:10px">
+        <span class="spin"></span>
+        <span id="progress-text">Iniciando…</span>
+      </div>
+      <div class="content" id="tv-content">
+        <div class="skel" style="height:80px"></div>
+        <div class="skel" style="height:140px"></div>
+        <div class="skel" style="height:200px"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Estado ────────────────────────────────────────────────────────────────
+const state = {
+  ticketId: null,
+  ticket:   null,
+  diag:     null,
+  jtras:    null,
+  drafts:   null
+};
+
+// ── Conexión SSE y polling de estado GLPI ──────────────────────────────────
+const evtSource = new EventSource("/api/events");
+evtSource.onmessage = (e) => {
+  try { handleEvent(JSON.parse(e.data)); } catch(_) {}
+};
+evtSource.onerror = () => {
+  setDot("glpi", "err");
+};
+
+// Polling ligero del estado GLPI — solo actualiza los dots del topbar
+async function pollGlpiStatus() {
+  try {
+    const r = await fetch("/api/glpi/status");
+    const s = await r.json();
+    if (s.isReady) setDot("glpi", "ok");
+    // Firefox headless: sin diálogos, sin banners de autenticación
+  } catch(_) {}
+  setTimeout(pollGlpiStatus, 5000);
+}
+pollGlpiStatus();
+
+
+function setProgress(text, active = true) {
+  const banner = document.getElementById("progress-banner");
+  const txt    = document.getElementById("progress-text");
+  if (!banner || !txt) return;
+  banner.style.display = active ? "flex" : "none";
+  if (active) txt.textContent = text;
+}
+
+function handleEvent(ev) {
+  switch (ev.type) {
+    case "job:start":
+      setProgress(ev.label);
+      break;
+    case "job:progress":
+      setProgress(ev.detail || ev.step || ev.label);
+      break;
+    case "job:done":
+      setProgress("", false);
+      break;
+    case "job:error":
+      setProgress("⚠ " + (ev.error||"").substring(0, 80), false);
+      break;
+
+    case "tickets:ready":
+      renderBandeja(ev.data.tickets || []);
+      setDot("glpi", "ok");
+      break;
+
+    case "ticket:ready":
+      if (ev.ticketId !== state.ticketId) break;
+      state.ticket = ev.data;
+      setStep("glpi", "done");
+      setProgress(`✓ Ticket leído (${ev.data.timelineCount} entradas). Clasificando con KB…`);
+      renderTicketHeader(ev.data);
+      renderTimeline(ev.data);
+      break;
+
+    case "ticket:error":
+      if (ev.ticketId !== state.ticketId) break;
+      setStep("glpi", "err");
+      setProgress("", false);
+      showError(ev.error);
+      break;
+
+    case "diag:ready":
+      if (ev.ticketId !== state.ticketId) break;
+      state.diag = ev.data;
+      setStep("extract", "done");
+      const cat = ev.data?.kbMatches?.[0]?.category?.label || "sin clasificar";
+      const cs  = ev.data?.entities?.codsol;
+      setProgress(cs
+        ? `✓ Clasificado: ${cat}. Consultando jTraspaso (CODSOL: ${cs})…`
+        : `✓ Clasificado: ${cat}. Sin CODSOL — generando borradores…`);
+      renderDiag(ev.data);
+      break;
+
+    case "jtraspaso:ready":
+      if (ev.ticketId !== state.ticketId) break;
+      state.jtras = ev.data;
+      setDot("jtras", "ok");
+      setStep("jtras", "done");
+      setProgress("✓ jTraspaso consultado. Generando borradores…");
+      renderJtraspaso(ev.data, ev.codsol);
+      break;
+
+    case "jtraspaso:skip":
+      if (ev.ticketId !== state.ticketId) break;
+      setStep("jtras", "done");
+      setProgress("ℹ jTraspaso: sin CODSOL. Generando borradores…");
+      setSection("sec-jtras", renderJtrasSkip(ev.reason));
+      break;
+
+    case "jtraspaso:error":
+      if (ev.ticketId !== state.ticketId) break;
+      setStep("jtras", "err");
+      setDot("jtras", "err");
+      setProgress("⚠ jTraspaso con error. Generando borradores…");
+      setSection("sec-jtras", `<div class="card"><div class="card-head">🗄 jTraspaso</div>
+        <div class="card-body"><div class="alert a-warn">⚠ ${esc(ev.error)}</div></div></div>`);
+      break;
+
+    case "draft:ready":
+      if (ev.ticketId !== state.ticketId) break;
+      state.drafts = ev.data;
+      setStep("draft", "done");
+      setProgress("✓ Borradores listos. Generando propuesta de cambios en GLPI…");
+      renderDrafts(ev.data);
+      break;
+
+    case "enrich:proposal":
+      if (ev.ticketId !== state.ticketId) break;
+      state.proposal = ev.data;
+      setStep("enrich", ev.data.hasChanges ? "done" : "done");
+      setProgress("", false);
+      renderEnrichProposal(ev.data);
+      break;
+
+    case "enrich:applied":
+      if (ev.ticketId !== state.ticketId) break;
+      renderEnrichResult(ev.data);
+      break;
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function esc(s){ return String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+async function api(url, body) {
+  const opts = body !== undefined
+    ? { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) }
+    : { method:"GET" };
+  const r = await fetch(url, opts);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || "HTTP " + r.status);
+  return d;
+}
+
+function setDot(id, state) {
+  const d = document.getElementById("dot-" + id);
+  if (d) d.className = "status-dot " + state;
+}
+function setStep(id, state) {
+  const s = document.getElementById("step-" + id);
+  if (!s) return;
+  s.className = "step " + state;
+  if (state === "running") s.innerHTML = s.innerHTML.replace(/^[^<]+/, t => t) + ' <span class="spin"></span>';
+}
+function showError(msg) {
+  const c = document.getElementById("tv-content");
+  c.innerHTML = `<div class="alert a-err">❌ ${esc(msg)}</div>`;
+}
+
+// Inserta o actualiza una sección nombrada dentro de tv-content
+function setSection(id, html) {
+  let el = document.getElementById(id);
+  if (!el) {
+    el = document.createElement("div");
+    el.id = id;
+    document.getElementById("tv-content").appendChild(el);
+  }
+  el.innerHTML = html;
+}
+
+// ── Bandeja ───────────────────────────────────────────────────────────────
+document.getElementById("btn-refresh").onclick = async () => {
+  const btn = document.getElementById("btn-refresh");
+  btn.disabled = true;
+  document.getElementById("refresh-ico").className = "spin";
+  document.getElementById("ticket-list").innerHTML =
+    '<div class="empty" style="flex-direction:column">Conectando con GLPI…</div>';
+  setDot("glpi", "running");
+  try {
+    await api("/api/tickets/refresh", {});
+    // Los tickets llegarán por SSE (tickets:ready)
+  } catch(e) {
+    document.getElementById("ticket-list").innerHTML =
+      `<div class="empty" style="color:var(--err)">${esc(e.message)}</div>`;
+    setDot("glpi", "err");
+    btn.disabled = false;
+    document.getElementById("refresh-ico").textContent = "⟳";
+  }
+};
+
+document.getElementById("btn-manual").onclick = () => {
+  const id = document.getElementById("manual-id").value.trim();
+  if (id) openTicket(id);
+};
+document.getElementById("manual-id").onkeydown = e => {
+  if (e.key === "Enter") document.getElementById("btn-manual").click();
+};
+
+function renderBandeja(tickets) {
+  document.getElementById("refresh-ico").className = "";
+  document.getElementById("refresh-ico").textContent = "⟳";
+  document.getElementById("btn-refresh").disabled = false;
+
+  const list = document.getElementById("ticket-list");
+  if (!tickets.length) {
+    list.innerHTML = '<div class="empty">Sin tickets pendientes</div>';
+    return;
+  }
+  list.innerHTML = tickets.map(t => `
+    <div class="ticket-item" data-id="${esc(t.id)}">
+      <div class="tid">#${esc(t.id)}</div>
+      <div class="ttitle" title="${esc(t.title)}">${esc(t.title||"(sin título)")}</div>
+      ${t.elementos ? `<div style="font-size:.68rem;color:var(--acc2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.elementos)}</div>` : ""}
+      <div class="tstate" style="background:var(--warn)"></div>
+    </div>`).join("");
+  list.querySelectorAll(".ticket-item").forEach(el => {
+    el.onclick = () => openTicket(el.dataset.id);
+  });
+}
+
+// ── Abrir ticket ──────────────────────────────────────────────────────────
+async function openTicket(id) {
+  state.ticketId = String(id);
+  state.ticket = state.diag = state.jtras = state.drafts = state.proposal = null;
+
+  // Marcar activo en bandeja
+  document.querySelectorAll(".ticket-item").forEach(el =>
+    el.classList.toggle("active", el.dataset.id === String(id)));
+
+  // Mostrar vista de ticket
+  document.getElementById("no-ticket").style.display = "none";
+  const tv = document.getElementById("ticket-view");
+  tv.classList.add("active");
+
+  // Reset UI
+  document.getElementById("tv-title").textContent = `Ticket #${id}`;
+  document.getElementById("tv-id").textContent     = `#${id}`;
+  ["tv-proc-wrap","tv-codsol-wrap","tv-dni-wrap"].forEach(i =>
+    document.getElementById(i).style.display = "none");
+
+  // Steps: todos en running
+  ["glpi","extract","jtras","draft","enrich"].forEach(s => {
+    const el = document.getElementById("step-" + s);
+    if (el) { el.className = "step running"; el.querySelector("span.spin")?.remove(); }
+  });
+
+  // Esqueletos de carga
+  document.getElementById("tv-content").innerHTML = `
+    <div class="skel" style="height:70px;border-radius:var(--r)"></div>
+    <div class="skel" style="height:130px;border-radius:var(--r)"></div>
+    <div class="skel" style="height:200px;border-radius:var(--r)"></div>
+    <div class="skel" style="height:250px;border-radius:var(--r)"></div>`;
+
+  setDot("glpi",  "running");
+  setDot("jtras", "running");
+  setProgress(`Leyendo ticket #${id} de GLPI…`);
+
+  try {
+    await api("/api/ticket/process", { ticketId: String(id) });
+  } catch(e) {
+    setProgress("", false);
+    showError(e.message);
+  }
+}
+
+// ── Render ticket ─────────────────────────────────────────────────────────
+function renderTicketHeader(t) {
+  document.getElementById("tv-title").textContent = t.title || `Ticket #${t.ticketId}`;
+  document.getElementById("tv-id").textContent = `#${t.ticketId}`;
+}
+
+/**
+ * Genera una card colapsable.
+ * @param {string} id       - ID del elemento
+ * @param {string} label    - Texto del summary (con emoji)
+ * @param {string} body     - HTML interior
+ * @param {boolean} open    - Abierta por defecto
+ * @param {string} badge    - Texto badge derecha (opcional)
+ */
+function colCard(id, label, body, open = false, badge = "") {
+  return `<div class="card" id="${id}">
+    <details ${open ? "open" : ""}>
+      <summary>
+        ${esc(label)}
+        ${badge ? `<span class="sum-right"><span style="font-size:.7rem;color:var(--txt2);font-weight:400;text-transform:none;letter-spacing:0">${badge}</span></span>` : ""}
+      </summary>
+      <div class="card-body">${body}</div>
+    </details>
+  </div>`;
+}
+
+function renderTimeline(t) {
+  const entries = (t.timeline || []);
+  const body = entries.length
+    ? entries.map(e => `
+        <div class="tl-entry">
+          <div class="tl-meta">${esc(e.date)} · ${esc(e.user||"Sistema")} · <em>${esc(e.type||"")}</em></div>
+          <div class="tl-body">${esc(e.content||"")}</div>
+          ${e.attachments && e.attachments.length
+            ? `<div class="tl-att">📎 ${e.attachments.map(a =>
+                `<a href="${esc(a.href)}" target="_blank" style="color:var(--acc2)">${esc(a.label)}</a>`
+              ).join(" · ")}</div>` : ""}
+        </div>`).join("")
+    : `<div style="color:var(--txt2)">Sin entradas en el historial.</div>`;
+  setSection("sec-timeline", colCard("sec-timeline-inner", `📋 Historial`, body, false, `${entries.length} entradas`));
+}
+
+// ── Render diagnóstico ────────────────────────────────────────────────────
+function renderDiag(d) {
+  const en = d.entities || {};
+  const m  = d.kbMatches && d.kbMatches[0];
+
+  if (en.procedimiento) {
+    document.getElementById("tv-proc").textContent = en.procedimiento;
+    document.getElementById("tv-proc-wrap").style.display = "";
+  }
+  if (en.codsol) {
+    document.getElementById("tv-codsol").textContent = en.codsol;
+    document.getElementById("tv-codsol-wrap").style.display = "";
+  }
+  const dniVal = (en.dnis||[]).concat(en.nies||[]).join(", ");
+  if (dniVal) {
+    document.getElementById("tv-dni").textContent = dniVal;
+    document.getElementById("tv-dni-wrap").style.display = "";
+  }
+
+  // Clasificación KB — abierta por defecto
+  if (m && m.score > 0) {
+    const cat  = m.category;
+    const prio = cat.priority || "baja";
+    const kbBody = `
+      <div class="clasif-banner ${prio}">
+        <div>
+          <div class="cat-label">${esc(cat.label)}</div>
+          <div class="cat-conf">
+            <span class="pill p-${prio==='alta'?'red':prio==='media'?'yellow':'blue'}">${esc(prio.toUpperCase())}</span>
+            ${esc(cat.area)} / ${esc(cat.ambito)} · score ${m.score}
+            ${m.matchedKeywords && m.matchedKeywords.length
+              ? "· <em>" + m.matchedKeywords.slice(0,5).map(esc).join(", ") + "</em>"
+              : ""}
+          </div>
+        </div>
+      </div>
+      ${m.tidExamples && m.tidExamples.length
+        ? `<div style="margin-top:10px;font-size:.75rem;color:var(--txt2)">
+            Tickets similares: ${m.tidExamples.map(t=>`<span class="pill p-blue">${esc(t)}</span>`).join(" ")}
+           </div>` : ""}`;
+    setSection("sec-clasif", colCard("sec-clasif-inner", "🧠 Clasificación", kbBody, true, cat.label.substring(0,40)));
+  }
+
+  // Placeholder jTraspaso
+  setSection("sec-jtras", `<div class="card">
+    <details>
+      <summary>🗄 jTraspaso <span class="spin" style="margin-left:6px"></span>
+        <span class="sum-right"><span style="font-size:.7rem;color:var(--warn)">consultando…</span></span>
+      </summary>
+      <div class="card-body" style="color:var(--txt2);font-size:.8rem">
+        ${en.codsol ? `Consultando CODSOL <strong>${esc(en.codsol)}</strong>…` : "Sin CODSOL — esperando…"}
+      </div>
+    </details>
+  </div>`);
+
+  // Placeholder borradores
+  setSection("sec-drafts", `<div class="card">
+    <details>
+      <summary>📝 Borradores <span class="spin" style="margin-left:6px"></span>
+        <span class="sum-right"><span style="font-size:.7rem;color:var(--warn)">generando…</span></span>
+      </summary>
+      <div class="card-body" style="color:var(--txt2);font-size:.8rem">Generando borradores…</div>
+    </details>
+  </div>`);
+}
+
+// ── Render jTraspaso ──────────────────────────────────────────────────────
+function renderJtraspaso(r, codsol) {
+  const ppf   = r.ppfdatos;
+  const pago  = r.pago;
+  const errs  = r.errors || [];
+
+  const idestado  = ppf ? parseInt(ppf.IDESTADO || ppf.idestado || "0") : null;
+  const codestado = pago ? (pago.CODESTADO || pago.codestado || "") : null;
+  const estadoClr = idestado === 5 ? "p-yellow" : idestado ? "p-green" : "p-red";
+
+  let guid = null, urlPresentador = null;
+  if (r.clobParsed) {
+    const gm = JSON.stringify(r.clobParsed).match(/ES_A14036665[^"'\s,}]+/);
+    if (gm) guid = gm[0];
+  }
+  if (!guid && r.rawOutput) {
+    const gm = r.rawOutput.match(/ES_A14036665[^"'\s,}]+/);
+    if (gm) guid = gm[0];
+  }
+  if (guid && ppf) {
+    const proc = (ppf.CODFORM || ppf.codform || "").replace(/^M/,"") || "1197";
+    urlPresentador = `https://sede.carm.es/presentador?proc=${proc}&sol=${codsol}&dptotram=175&guid=${guid}`;
+  }
+
+  let body = "";
+  if (errs.length) body += `<div class="alert a-warn" style="margin-bottom:10px">${errs.map(esc).join("<br>")}</div>`;
+
+  body += `<div class="jtras-row">
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:6px">PPFDATOS</div>
+      ${ppf ? `<dl class="kv">
+        <dt>IDDATOS</dt><dd>${esc(ppf.IDDATOS||ppf.iddatos||"—")}</dd>
+        <dt>IDESTADO</dt><dd><span class="pill ${estadoClr}">${esc(ppf.IDESTADO||ppf.idestado||"—")}</span>
+          ${idestado===5 ? '<span style="color:var(--warn);font-size:.7rem"> ⚠ Presentación pendiente</span>' : ""}</dd>
+        <dt>CODFORM</dt><dd>${esc(ppf.CODFORM||ppf.codform||"—")}</dd>
+        <dt>GUID</dt><dd><code style="font-size:.7rem">${esc(guid||"— (ver CLOB)")}</code></dd>
+      </dl>` : `<div class="alert a-warn">Sin datos en PPFDATOS</div>`}
+    </div>
+    <div>
+      <div style="font-size:.7rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:6px">PAGO</div>
+      ${pago ? `<dl class="kv">
+        <dt>CODESTADO</dt><dd><span class="pill ${codestado==='PA'?'p-green':codestado==='FN'?'p-yellow':'p-red'}">${esc(codestado||"—")}</span></dd>
+        <dt>IMPORTE</dt><dd>${esc(pago.IMPORTE||pago.importe||"—")}</dd>
+        <dt>NIF</dt><dd>${esc(pago.NIF||pago.nif||"—")}</dd>
+        <dt>IDPAGO</dt><dd>${esc(pago.IDPAGO||pago.idpago||"—")}</dd>
+      </dl>` : `<div class="alert a-warn">Sin datos de PAGO</div>`}
+    </div>
+  </div>`;
+
+  if (urlPresentador) {
+    body += `<div class="url-box">
+      <div class="url-label">✅ URL Presentador lista</div>
+      <a href="${esc(urlPresentador)}" target="_blank">${esc(urlPresentador)}</a>
+      <button class="btn btn-ghost" style="margin-top:6px;font-size:.72rem"
+        onclick="navigator.clipboard.writeText('${urlPresentador.replace(/'/g,"\\'")}').then(()=>this.textContent='✓ Copiada!')">
+        📋 Copiar URL
+      </button>
+    </div>`;
+  }
+
+  if (r.eventos && r.eventos.length) {
+    body += `<details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:.75rem;color:var(--txt2)">📋 Eventos (${r.eventos.length})</summary>
+      <table style="width:100%;border-collapse:collapse;font-size:.73rem;margin-top:6px">
+        <thead><tr>
+          <th style="text-align:left;padding:4px 8px;background:var(--bg3);color:var(--txt2)">IDEVENTO</th>
+          <th style="text-align:left;padding:4px 8px;background:var(--bg3);color:var(--txt2)">FECEVENTO</th>
+          <th style="text-align:left;padding:4px 8px;background:var(--bg3);color:var(--txt2)">RESPUESTA</th>
+        </tr></thead>
+        <tbody>${r.eventos.map(ev=>`<tr>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3)">${esc(ev.IDEVENTO||"")}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3)">${esc(ev.FECEVENTO||"")}</td>
+          <td style="padding:4px 8px;border-bottom:1px solid var(--bg3);font-size:.68rem">${esc((ev.RESPUESTA_PREVIEW||"").substring(0,120))}</td>
+        </tr>`).join("")}</tbody>
+      </table>
+    </details>`;
+  }
+  if (r.clobRaw) {
+    body += `<details style="margin-top:10px">
+      <summary style="cursor:pointer;font-size:.75rem;color:var(--txt2)">📄 CLOB DATOS</summary>
+      <pre style="font-size:.68rem;max-height:250px;overflow-y:auto;background:var(--bg);padding:10px;border-radius:6px;margin-top:6px;white-space:pre-wrap">${esc(r.clobRaw.substring(0,5000))}</pre>
+    </details>`;
+  }
+
+  const badge = ppf
+    ? `IDESTADO ${esc(ppf.IDESTADO||ppf.idestado||"?")} · ${pago ? esc(codestado||"?") : "sin pago"}`
+    : "sin datos";
+
+  setSection("sec-jtras", colCard("sec-jtras-inner", `🗄 jTraspaso — ${esc(codsol)}`, body, false, badge));
+}
+
+function renderJtrasSkip(reason) {
+  return colCard("sec-jtras-inner", "🗄 jTraspaso",
+    `<div class="alert a-info">${esc(reason)}</div>`, false, "sin CODSOL");
+}
+
+// ── Render borradores — ABIERTOS por defecto ──────────────────────────────
+function renderDrafts(d) {
+  const { classification: c, task, followup } = d;
+
+  const taskBody = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <button class="btn btn-ghost" style="font-size:.72rem" onclick="copyDraft('draft-task')">📋 Copiar TAREA</button>
+    </div>
+    <textarea class="draft-box" id="draft-task">${esc(task)}</textarea>`;
+
+  const followBody = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <button class="btn btn-ghost" style="font-size:.72rem" onclick="copyDraft('draft-followup')">📋 Copiar</button>
+    </div>
+    <textarea class="draft-box" id="draft-followup">${esc(followup)}</textarea>`;
+
+  setSection("sec-drafts", `<div id="sec-drafts-wrap" style="display:flex;flex-direction:column;gap:12px">
+    ${colCard("sec-draft-task", "📝 Borrador TAREA", taskBody, true)}
+    ${colCard("sec-draft-followup", "💬 Borrador SEGUIMIENTO (al ciudadano)", followBody, true)}
+  </div>`);
+}
+
+function copyDraft(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  navigator.clipboard.writeText(el.value).then(() => {
+    const btn = el.closest(".card").querySelector(".copy-btn");
+    if (btn) { const t = btn.textContent; btn.textContent = "✓ Copiado!"; setTimeout(()=>btn.textContent=t,2000); }
+  });
+}
+
+// ── Panel de enriquecimiento GLPI ─────────────────────────────────────────
+function renderEnrichProposal(p) {
+  if (!p || !p.hasChanges) {
+    setSection("sec-enrich", colCard("sec-enrich-inner", "✏️ Actualización GLPI",
+      `<div class="alert a-ok">✓ Sin cambios necesarios — título y elementos ya correctos.</div>`,
+      false, "✓ OK"
+    ));
+    return;
+  }
+
+  const elemRows = (p.elementos || []).map(e => `
+    <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--bg3)">
+      <span class="pill p-blue">+ ${esc(e.tipo)}</span>
+      <strong style="font-size:.8rem">${esc(e.nombre)}</strong>
+      <span style="font-size:.72rem;color:var(--txt2)">${esc(e.label)}</span>
+    </div>`).join("");
+
+  const body = `
+    <div class="alert a-info" style="margin-bottom:12px;font-size:.78rem">
+      Revisa y pulsa <strong>"Confirmar"</strong> para aplicar. <strong>No se puede deshacer automáticamente.</strong>
+    </div>
+    ${p.titleChanged ? `
+    <div style="margin-bottom:12px">
+      <div style="font-size:.7rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:6px">Título</div>
+      <div style="font-size:.72rem;color:var(--txt2);margin-bottom:4px">Actual: <em>${esc(p.currentTitle)}</em></div>
+      <div style="font-size:.8rem;color:var(--ok)">→ Nuevo: <strong>${esc(p.titleProposal)}</strong></div>
+    </div>` : ""}
+    ${elemRows ? `
+    <div style="margin-bottom:14px">
+      <div style="font-size:.7rem;font-weight:700;color:var(--txt2);text-transform:uppercase;margin-bottom:6px">Elementos</div>
+      ${elemRows}
+    </div>` : ""}
+    <div style="display:flex;gap:10px;margin-top:12px">
+      <button class="btn btn-primary" onclick="applyEnrichment()" style="background:#166534;color:var(--ok)">
+        ✅ Confirmar y aplicar en GLPI
+      </button>
+      <button class="btn btn-ghost" onclick="setSection('sec-enrich','')">✖ Descartar</button>
+    </div>
+    <div id="enrich-status" style="margin-top:10px"></div>`;
+
+  setSection("sec-enrich", colCard("sec-enrich-inner", "✏️ Actualización GLPI", body, true, "⚠ Requiere confirmación"));
+}
+
+async function applyEnrichment() {
+  if (!state.proposal) return;
+  const btn = document.querySelector('#sec-enrich .btn-primary');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span> Aplicando…'; }
+  const status = document.getElementById("enrich-status");
+  try {
+    const r = await api("/api/glpi/enrich/apply", { proposal: state.proposal });
+    if (status) {
+      status.innerHTML = r.ok
+        ? `<div class="alert a-ok">✅ Aplicado:<br>${(r.applied||[]).map(esc).join("<br>")}</div>`
+        : `<div class="alert a-warn">⚠ Parcial:<br>${(r.errors||[]).map(esc).join("<br>")}</div>`;
+    }
+  } catch(e) {
+    if (status) status.innerHTML = `<div class="alert a-err">❌ ${esc(e.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "✅ Aplicar de nuevo"; }
+  }
+}
+
+function renderEnrichResult(r) {
+  const status = document.getElementById("enrich-status");
+  if (!status) return;
+  status.innerHTML = r.ok
+    ? `<div class="alert a-ok">✅ ${(r.applied||[]).map(esc).join(" · ")}</div>`
+    : `<div class="alert a-warn">⚠ Errores: ${(r.errors||[]).map(esc).join(", ")}</div>`;
+}
+
+// Actualizar openTicket para incluir step enrich
+</script>
+</body>
+</html>
