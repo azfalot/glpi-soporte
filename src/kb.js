@@ -598,6 +598,33 @@ SELECT * FROM PEPAORI WHERE DNI_NIE = '{{DNI}}' AND COD_CONCEPTO = '{{CONCEPTO}}
   }
 ];
 
+// ── Carga dinámica de reglas ───────────────────────────────────────────────
+const RULES_FILE = path.join(process.cwd(), "data", "kb_rules.json");
+let _activeRules = KB_CATEGORIES;
+
+function loadRules() {
+  try {
+    if (fs.existsSync(RULES_FILE)) {
+      const data = JSON.parse(fs.readFileSync(RULES_FILE, "utf8"));
+      if (Array.isArray(data) && data.length > 0) {
+        _activeRules = data;
+        return _activeRules;
+      }
+    }
+  } catch (err) {
+    console.warn("[KB] Error leyendo data/kb_rules.json, usando reglas por defecto:", err.message);
+  }
+  _activeRules = KB_CATEGORIES;
+  return _activeRules;
+}
+
+function reloadRules() {
+  return loadRules();
+}
+
+// Cargar reglas al iniciar
+loadRules();
+
 // ── Búsqueda en el KB ──────────────────────────────────────────────────────
 
 /**
@@ -608,10 +635,11 @@ SELECT * FROM PEPAORI WHERE DNI_NIE = '{{DNI}}' AND COD_CONCEPTO = '{{CONCEPTO}}
  */
 function kbSearch(text, top = 3) {
   const t = text.toLowerCase();
-  const scored = KB_CATEGORIES
+  const rules = _activeRules || KB_CATEGORIES;
+  const scored = rules
     .filter(c => c.id !== "GENERAL")
     .map(cat => {
-      const score = cat.keywords.filter(kw => t.includes(kw)).length;
+      const score = (cat.keywords || []).filter(kw => t.includes(kw.toLowerCase())).length;
       return { cat, score };
     })
     .filter(x => x.score > 0)
@@ -619,13 +647,14 @@ function kbSearch(text, top = 3) {
     .slice(0, top);
 
   if (!scored.length) {
-    return [{ category: KB_CATEGORIES[KB_CATEGORIES.length - 1], score: 0, sqlTemplate: null, checkQueries: [], tidExamples: [] }];
+    const generalCat = rules.find(c => c.id === "GENERAL") || rules[rules.length - 1];
+    return [{ category: generalCat, score: 0, sqlTemplate: null, checkQueries: [], tidExamples: [] }];
   }
 
   return scored.map(x => ({
     category: x.cat,
     score: x.score,
-    matchedKeywords: x.cat.keywords.filter(kw => t.includes(kw)),
+    matchedKeywords: (x.cat.keywords || []).filter(kw => t.includes(kw.toLowerCase())),
     sqlTemplate: x.cat.sqlTemplate,
     checkQueries: x.cat.checkQueries,
     tidExamples: x.cat.tidExamples
@@ -809,6 +838,15 @@ function buildVars(entities = {}, diagData = {}, ticketId = null) {
   };
 }
 
-function kbCategories() { return KB_CATEGORIES; }
+function kbCategories() { return _activeRules || KB_CATEGORIES; }
 
-module.exports = { KB_CATEGORIES, kbSearch, kbClassify, kbCategories, fillTemplate, buildVars };
+module.exports = {
+  KB_CATEGORIES,
+  kbSearch,
+  kbClassify,
+  kbCategories,
+  fillTemplate,
+  buildVars,
+  loadRules,
+  reloadRules
+};

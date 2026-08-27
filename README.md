@@ -1,83 +1,96 @@
-# Soporte Incidencias LIVE (standalone)
+# Soporte Incidencias GLPI & jTraspaso (Standalone)
 
-Aplicación standalone para Windows — **independiente de PAETRIBUTOS**.
+Herramienta standalone de diagnóstico automático, clasificación KB y enriquecimiento de incidencias en GLPI y jTraspaso.
 
-## Requisitos
+---
 
-- Node.js 20+
-- SQL Server accesible (jTraspaso)
-- Playwright Chromium (instalado automáticamente con `npx playwright install chromium`)
+## 🚀 Puesta en marcha
 
-## Puesta en marcha
+### 1. Desarrollo Offline / Sin VPN (Modo MOCK)
+Permite trabajar, desarrollar la interfaz, ajustar reglas de diagnóstico y probar el flujo completo **sin acceso a la red CARM ni certificados FNMT**.
 
 ```bash
-# 1. Copiar y rellenar credenciales DB
-copy .env.example .env
-# edita .env con JTRAS_SERVER, JTRAS_DATABASE, JTRAS_USER, JTRAS_PASSWORD
-
-# 2. Instalar dependencias
+# Instalar dependencias
 npm install
 
-# 3. (Primera vez) instalar navegador Playwright
-npx playwright install chromium
+# Ejecutar suite de pruebas unitarias
+npm test
 
-# 4. Arrancar
+# Arrancar servidor en modo MOCK (por defecto)
+npm start
+```
+Abre en tu navegador: `http://127.0.0.1:8788`
+
+---
+
+### 2. Puesto de Origen / Producción (Modo LIVE)
+Requiere acceso a la red corporativa (VPN) y certificado digital FNMT instalado en el sistema.
+
+```bash
+# 1. Configurar entorno
+copy .env.example .env
+# En .env: configurar DATA_MODE=live (y HEADLESS=true si no requieres interfaz de navegador)
+
+# 2. Instalar navegador Firefox en Playwright (solo la primera vez)
+npx playwright install firefox
+
+# 3. Arrancar servidor
 npm start
 ```
 
-Abre: `http://127.0.0.1:8788`
+---
 
-## Flujo de uso
+## 🧭 Flujo de Funcionamiento
 
 ```
-Bandeja
-  └─ [Cargar tickets]  →  GLPI abre navegador (login por certificado si es la 1ª vez)
-                          Lista "tickets a ser procesados"
-
-  └─ [Seleccionar ticket]  →  TAB "Ticket": metadatos + timeline completo + adjuntos
-
-  └─ TAB "Diagnóstico"
-       [Analizar & consultar jTraspaso]
-         · Extrae DNI/NIE, matrícula, CODSOL, procedimiento, fecha del texto
-         · Lanza query LIVE en jTraspaso (SQL Server)
-         · Muestra resultados + JSON CLOB reconstruido
-
-  └─ TAB "Borradores"
-       [Generar borradores]
-         · Clasifica la incidencia (8 categorías)
-         · Genera borrador de TAREA (con evidencias)
-         · Genera borrador de SEGUIMIENTO personalizado (para el ciudadano)
-         · Botones de copia rápida
+Bandeja de Tickets
+  └─ [Cargar tickets]  →  Lee tickets pendientes de "Tickets a ser procesados" (o fixtures en mock).
+  └─ [Seleccionar ticket]  →  Lanza automáticamente el pipeline de 5 pasos en segundo plano con SSE:
+       1. 📥 Lectura de ticket (historial completo y adjuntos).
+       2. 🔎 Extracción de entidades (DNI, matrícula, CODSOL, procedimiento, fecha) y clasificación KB.
+       3. 🗄 Consulta diagnóstica jTraspaso (PPFDATOS, PASAPAGO.PAGO, eventos y JSON CLOB).
+       4. 📝 Generación de borradores de TAREA y SEGUIMIENTO con validación de variables.
+       5. ✏️ Propuesta de enriquecimiento GLPI (título normalizado y elementos asociados).
 ```
 
-## Variables de entorno (.env)
+---
 
-| Variable | Descripción | Default |
+## ⚙️ Variables de Entorno (`.env`)
+
+| Variable | Descripción | Valores / Default |
 |---|---|---|
-| `JTRAS_SERVER` | Host SQL Server | `localhost` |
-| `JTRAS_DATABASE` | Base de datos | `jTraspaso` |
-| `JTRAS_USER` | Usuario SQL | _(vacío)_ |
-| `JTRAS_PASSWORD` | Contraseña SQL | _(vacío)_ |
-| `JTRAS_PORT` | Puerto | `1433` |
-| `JTRAS_TRUST_CERT` | Certificado autofirmado | `false` |
-| `PORT` | Puerto Express | `8788` |
+| `PORT` | Puerto del servidor Express | `8788` |
+| `DATA_MODE` | Modo de datos: `mock` (fixtures offline) o `live` (Playwright) | `mock` |
+| `HEADLESS` | Ejecutar Firefox en background sin ventana gráfica | `false` |
 
-## Estructura
+---
+
+## 📂 Estructura del Proyecto
 
 ```
-src/
-  main.js       — Servidor Express + endpoints REST
-  glpiLive.js   — Playwright: login, bandeja, lectura de ticket
-  db.js         — Conexión SQL Server (mssql), query jTraspaso
-  extract.js    — Extracción de entidades (DNI, NIE, matrícula, CODSOL…)
-  classify.js   — Clasificación + generación de borradores
-public/
-  index.html    — UI completa (bandeja → ticket → diagnóstico → borradores)
-.env.example    — Plantilla de configuración
+glpi-soporte/
+├── .github/workflows/ci.yml   — Integración continua con GitHub Actions
+├── data/
+│   └── kb_rules.json          — Reglas de clasificación y plantillas KB editables en caliente
+├── fixtures/                  — Datos y respuestas simuladas para desarrollo offline
+│   ├── tickets.json           — Tickets GLPI mock
+│   └── jtraspaso.json         — Respuestas jTraspaso mock
+├── src/
+│   ├── adapters/              — Capa de adaptadores (Live Playwright vs Mock Fixtures)
+│   ├── storage/ticketStore.js — Persistencia local de tickets analizados
+│   ├── browserManager.js      — Gestión unificada del ciclo de vida de Playwright Firefox
+│   ├── ffKiller.js            — Limpieza de procesos huérfanos
+│   ├── glpiLive.js            — Automatización GLPI (Playwright)
+│   ├── glpiEnrich.js          — Normalización de títulos y enriquecimiento de tickets
+│   ├── jtraspasoLive.js       — Ejecución SQL*Plus en jTraspaso y reconstrucción CLOB
+│   ├── extract.js             — Extracción de entidades por regex
+│   ├── kb.js                  — Motor de conocimiento y reglas dinámicas
+│   ├── classify.js            — Clasificador y generador de tareas/seguimientos
+│   ├── schemaExplorer.js      — Explorador y discovery de esquemas Oracle
+│   ├── jobQueue.js            — Cola de tareas async y streaming SSE
+│   └── main.js                — API REST Express y servidor web
+├── public/
+│   └── index.html             — SPA frontend con streaming en tiempo real y filtros
+└── tests/
+    └── test-pipeline.js       — Suite de pruebas unitarias y de integración
 ```
-
-## Adaptación a tu esquema SQL
-
-Edita `src/db.js` → función `queryJTraspaso()`:
-- Ajusta el nombre de tabla (`dbo.TRAMITES`) y las columnas al esquema real.
-- La columna del CLOB JSON puede llamarse `DATOS_JSON`, `JSON_CLOB` o `CLOB_DATOS` — el código prueba las tres con `COALESCE`.

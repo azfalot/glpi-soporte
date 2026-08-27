@@ -1,58 +1,25 @@
 "use strict";
 
-const path = require("path");
-const fs   = require("fs");
-const { firefox } = require("playwright");
-const { getFirefoxPids, killPids, killOrphanPlaywrightFirefox } = require("./ffKiller");
+const { launchContext, closeContextSafe } = require("./browserManager");
 
 const JTRAS_URL = "https://jtraspaso.carm.es/jTraspaso/faces/trasSQLPlus.jsp";
-const PROFILE   = path.join(process.cwd(), ".profile-jtras-ff");
-
-const FF_PREFS = {
-  "security.osclientcerts.autoload":   true,
-  "security.default_personal_cert":    "Select Automatically",
-  "security.ask_for_token_init":       false,
-  "security.ssl.enable_ocsp_stapling": false,
-  "network.trr.mode":                  5,
-  "network.proxy.type":                0
-};
+const PROFILE   = ".profile-jtras-ff";
 
 let _ctx = null, _page = null;
 
-function unlockProfile(profilePath) {
-  for (const lockFile of ["lock", ".parentlock"]) {
-    try { fs.unlinkSync(path.join(profilePath, lockFile)); } catch (_) {}
-  }
-}
-
 async function getPage() {
   if (_ctx && _page && !_page.isClosed()) return _page;
-  unlockProfile(PROFILE);
-  _ctx = await firefox.launchPersistentContext(PROFILE, {
-    headless: false,
-    viewport: { width: 1440, height: 900 },
-    ignoreHTTPSErrors: true,
-    firefoxUserPrefs: FF_PREFS
-  });
-  _page = _ctx.pages()[0] || await _ctx.newPage();
-  _page.on("dialog", async d => { await d.accept().catch(() => {}); });
+  const res = await launchContext(PROFILE, { headless: process.env.HEADLESS === "true" });
+  _ctx = res.context;
+  _page = res.page;
   return _page;
 }
 
 async function closeContext() {
-  const pidsBefore = getFirefoxPids();
-  try { if (_ctx) await _ctx.close(); } catch (_) {}
-  _ctx = null; _page = null;
-  const kill = () => {
-    const now = getFirefoxPids();
-    const toKill = [...new Set([...pidsBefore, ...now])];
-    if (toKill.length) {
-      console.log(`[ffKiller] cerrando ${toKill.length} procesos Firefox (jTraspaso)`);
-      killPids(toKill);
-    }
-  };
-  setTimeout(kill, 1000);
-  setTimeout(kill, 3000);
+  const ctx = _ctx;
+  _ctx = null;
+  _page = null;
+  await closeContextSafe(ctx, "jTraspaso");
 }
 async function ensureJTraspaso(page) {
   const url = page.url();

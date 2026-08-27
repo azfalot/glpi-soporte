@@ -1,61 +1,24 @@
 "use strict";
 
-const path = require("path");
-const fs   = require("fs");
-const { firefox } = require("playwright");
-const { getFirefoxPids, killPids, killOrphanPlaywrightFirefox } = require("./ffKiller");
+const { launchContext, closeContextSafe } = require("./browserManager");
 
-const PROFILE = path.join(process.cwd(), ".profile-glpi-ff");
-
-const FF_PREFS = {
-  "security.osclientcerts.autoload":   true,
-  "security.default_personal_cert":    "Select Automatically",
-  "security.ask_for_token_init":       false,
-  "security.ssl.enable_ocsp_stapling": false,
-  "network.trr.mode":                  5,
-  "network.proxy.type":                0
-};
+const PROFILE = ".profile-glpi-ff";
 
 let _ctx = null, _page = null;
 
-/** Elimina el lock file del perfil Firefox (lo deja si Firefox muere de golpe) */
-function unlockProfile(profilePath) {
-  for (const lockFile of ["lock", ".parentlock"]) {
-    try { fs.unlinkSync(path.join(profilePath, lockFile)); } catch (_) {}
-  }
-}
-
 async function getPage() {
   if (_ctx && _page && !_page.isClosed()) return _page;
-  // Desbloquear perfil antes de lanzar (por si quedó lock de una sesión anterior)
-  unlockProfile(PROFILE);
-  _ctx = await firefox.launchPersistentContext(PROFILE, {
-    headless: false,
-    viewport: { width: 1440, height: 900 },
-    ignoreHTTPSErrors: true,
-    firefoxUserPrefs: FF_PREFS
-  });
-  _page = _ctx.pages()[0] || await _ctx.newPage();
-  _page.on("dialog", async d => { await d.accept().catch(() => {}); });
+  const res = await launchContext(PROFILE, { headless: process.env.HEADLESS === "true" });
+  _ctx = res.context;
+  _page = res.page;
   return _page;
 }
 
 async function closeContext() {
-  // Capturar PIDs ANTES de cerrar (mientras aún son hijos del servidor)
-  const pidsBefore = getFirefoxPids();
-  try { if (_ctx) await _ctx.close(); } catch (_) {}
-  _ctx = null; _page = null;
-  // Matar exactamente los PIDs que teníamos (+ cualquier hijo nuevo)
-  const kill = () => {
-    const now = getFirefoxPids();
-    const toKill = [...new Set([...pidsBefore, ...now])];
-    if (toKill.length) {
-      console.log(`[ffKiller] cerrando ${toKill.length} procesos Firefox (GLPI)`);
-      killPids(toKill);
-    }
-  };
-  setTimeout(kill, 1000);
-  setTimeout(kill, 3000); // segunda pasada
+  const ctx = _ctx;
+  _ctx = null;
+  _page = null;
+  await closeContextSafe(ctx, "GLPI");
 }
 async function ensureCentral(page) {
   if (page.url().includes("/front/central.php")) return;

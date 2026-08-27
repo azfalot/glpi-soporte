@@ -1,0 +1,224 @@
+[
+  {
+    "id": "AUTOFIRMA_GLOBAL",
+    "label": "AutoFirma — Incidencia global (todos los usuarios afectados)",
+    "keywords": [
+      "autofirma", "auto firma", "firma electronica", "firma no valida",
+      "no es valida", "no podemos realizar", "ningun procedimiento",
+      "todos los usuarios", "incidencia tecnica", "afectando a la firma",
+      "presentador", "no es posible finalizar", "1197", "error procedimientos carm",
+      "sede electronica", "no puede firmar"
+    ],
+    "area": "FRONTALES",
+    "ambito": "PAETRIBUTOS",
+    "priority": "alta",
+    "solution": "Incidencia global de AutoFirma/Presentador (todos los usuarios afectados):\n1. Verificar si ya existe ticket de seguimiento de la incidencia global (ej: GLPI 1566026).\n2. Si la incidencia global YA ESTÁ RESUELTA: seguir el flujo Estado 5 — localizar CODSOL en jTraspaso,\n   obtener GUID, construir URL Presentador y facilitar al ciudadano.\n3. Si la incidencia global SIGUE ABIERTA: responder al ciudadano indicando que se está trabajando\n   en la resolución y que se le notificará cuando pueda completar el trámite.\n4. Mantener ticket en espera hasta resolución de incidencia global.",
+    "sqlTemplate": "-- Verificar estado de la solicitud cuando se resuelva la incidencia global\nSELECT IDDATOS, IDESTADO, CODFORM, CODSOL, SUBSTR(JSON, 1, 500) AS JSON_PREVIEW\nFROM PPFDATOS\nWHERE CODSOL = '{{CODSOL}}'\nORDER BY IDDATOS DESC;\n\n-- Si IDESTADO=5: construir URL Presentador\n-- https://sede.carm.es/presentador?proc={{PROC}}&sol={{CODSOL}}&dptotram={{DPTO}}&guid={{GUID}}",
+    "checkQueries": [
+      "SELECT IDDATOS, IDESTADO, CODFORM, CODSOL FROM PPFDATOS WHERE CODSOL = '{{CODSOL}}';"
+    ],
+    "followupTemplate": {
+      "pendiente": "Att CAU UTE-ACCENTURE-OESIA-ATRM\n\nHay que indicar la siguiente solución a la persona solicitante:\n\n\"Buenos días,\n\nSentimos las molestias ocasionadas.\n\nActualmente existe una incidencia técnica que está afectando a la firma electrónica de las solicitudes, por lo que no es posible finalizar la presentación de los trámites. Se está trabajando en su resolución.\n\nUna vez solucionada la incidencia, podrá completar la presentación de su solicitud. Le notificaremos en cuanto esté disponible.\n\nGracias.\n\nUn saludo.\"",
+      "resuelta": "Att CAU UTE-ACCENTURE-OESIA-ATRM\n\nHay que indicar la siguiente solución a la persona solicitante:\n\n\"Buenos días,\n\nLa incidencia técnica que afectaba a la firma electrónica ha sido resuelta.\n\nLe facilitamos la siguiente URL para que pueda continuar con la presentación de su solicitud y finalizar correctamente el trámite:\n\n{{URL_PRESENTADOR}}\n\nUna vez completada la presentación podrá obtener el justificante correspondiente.\n\nGracias.\n\nUn saludo.\""
+    },
+    "taskTemplate": "Se revisa el ticket relativo a la incidencia de AutoFirma / Presentador reportada por el ciudadano (Proc. {{PROC}}).\n\nEl ciudadano indica que no puede realizar procedimientos en la sede electrónica de la CARM porque la firma electrónica de las solicitudes no es válida.\n\nSe verifica que se trata de una incidencia global que afecta a todos los usuarios del Presentador. Se crea/referencia el ticket de seguimiento de la incidencia global (GLPI {{GLPI_GLOBAL}}).\n\nEl ticket queda en espera de la resolución de la incidencia en Presentador.\n\nUna vez resuelta la incidencia global, se deberá:\n  1. Localizar la solicitud del ciudadano en jTraspaso (PPFDATOS) por CODSOL.\n  2. Verificar IDESTADO y GUID.\n  3. Construir URL Presentador y facilitar al ciudadano.\n\nSe adjuntan capturas de las comprobaciones realizadas.",
+    "tidExamples": ["1565896", "1566026"]
+  },
+  {
+    "id": "AUTOFIRMA_ESTADO5",
+    "label": "AutoFirma / Presentador — Estado 5 (pago OK, presentación pendiente)",
+    "keywords": [
+      "autofirma", "auto firma", "presentador", "estado 5", "estado5",
+      "guid", "urloktributos", "cod012", "presentacion pendiente",
+      "no ha podido firmar", "no pudo firmar",
+      "pago realizado", "pago correcto", "pago ok",
+      "no finalizo", "corte de red", "cierre del navegador",
+      "modelo 600", "modelo 620",
+      "facilitar url", "url presentador", "recuperar presentacion",
+      "n28", "doch"
+    ],
+    "area": "FRONTALES",
+    "ambito": "PAETRIBUTOS",
+    "priority": "alta",
+    "solution": "FLUJO AUTOFIRMA Estado 5 (pago OK, presentacion pendiente):\n1. Localizar solicitud en jTraspaso: CODSOL, PROC, IDESTADO, GUID, N28.\n2. Verificar pago: buscar \"estado\":\"PAGADO\" o N28 (28 digitos) en JSON de PPFDATOS.\n3. Confirmar IDESTADO=5.\n4. Verificar GUID (formato ES_A14036665_YYYY_DOCH...).\n5. Construir URL Presentador y facilitar al ciudadano.\n   — Si COD012 (ya presentada): facilitar URLOKTRIBUTOS.\n   — Si documentos ya generados: reenviar enlace de acceso.",
+    "sqlTemplate": "-- AutoFirma Estado 5: localizar solicitud en jTraspaso\nSELECT IDDATOS, IDESTADO, CODFORM, CODSOL, SUBSTR(JSON,1,500) AS JSON_PREVIEW\nFROM PPFDATOS\nWHERE CODSOL = '{{CODSOL}}'\nORDER BY IDDATOS DESC;\n\nSELECT IDDATOS, IDESTADO, CODFORM, CODSOL, JSON\nFROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};\n\n-- URL Presentador:\n-- https://sede.carm.es/presentador?proc={{PROC}}&sol={{CODSOL}}&dptotram={{DPTO}}&guid={{GUID}}\n-- Si COD012 -> URLOKTRIBUTOS:\n-- https://sede.carm.es/paetributos/formularios/URLOKTRIBUTOS?codForm=M{{MODELO}}&proc={{PROC}}&sol={{CODSOL}}&dptotram={{DPTO}}&guid={{GUID}}",
+    "checkQueries": [
+      "SELECT IDDATOS, IDESTADO, CODFORM, CODSOL FROM PPFDATOS WHERE CODSOL = '{{CODSOL}}';",
+      "SELECT IDDATOS, IDESTADO, SUBSTR(JSON,1,2000) FROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};"
+    ],
+    "followupTemplate": {
+      "standard": "Att CAU UTE-ACCENTURE-OESIA-ATRM\n\nHay que indicar la siguiente solución a la persona solicitante:\n\n\"Buenos días,\n\nSentimos las molestias ocasionadas.\n\nLe facilitamos la siguiente URL para que pueda continuar con la presentación de su solicitud y finalizar correctamente el trámite:\n\n{{URL_PRESENTADOR}}\n\nUna vez completada la presentación podrá obtener el justificante correspondiente.\n\nGracias.\n\nUn saludo.\"",
+      "alreadyPresented": "Att CAU UTE-ACCENTURE-OESIA-ATRM\n\nBuenos días,\n\nHemos comprobado que la presentación de su solicitud se ha realizado correctamente.\n\nLe facilitamos nuevamente la siguiente URL para acceder a la documentación generada:\n\n{{URL_DOCS}}\n\nGracias.\n\nUn saludo."
+    },
+    "taskTemplate": "Se revisa la solicitud {{CODSOL}} correspondiente al procedimiento {{PROC}}.\n\nSe comprueba que el pago asociado consta realizado correctamente por importe de {{IMPORTE}}, con N28 {{N28}}.\n\nSe verifica la correcta generación del GUID {{GUID}} y de la URL de Presentador.\n\nRevisado el estado de tramitación, la solicitud permanece en estado 5, habiéndose completado correctamente el pago pero quedando pendiente la finalización del proceso de presentación electrónica.\n\nNo se observan incidencias en el pago ni en la generación de la solicitud, por lo que se facilita al interesado la URL de recuperación para que pueda reanudar el proceso y completar la presentación del expediente.\n\nURL Presentador: {{URL_PRESENTADOR}}\n\nSe adjuntan capturas de las comprobaciones realizadas.",
+    "tidExamples": ["1559652", "1560114", "1565516", "1530381"]
+  },
+  {
+    "id": "PASARELA_CCO",
+    "label": "Pasarela de Pagos — Actualización CCO",
+    "keywords": ["cco", "ajustaccopago", "cajamar", "n28", "fragmento", "pasarela"],
+    "area": "FRONTALES",
+    "ambito": "PASARELADEPAGO",
+    "priority": "alta",
+    "solution": "Ejecutar utiliglpi.ajustaCCOPagoCorrecto() con los datos del pago (fecha, entidad, N28, importe, IDPETITPV, fragmento CCO, GLPI).",
+    "sqlTemplate": "-- Actualización CCO Pasarela de Pagos\nset serveroutput on\nbegin\n  dbms_output.put_line('Inicio --------');\n  UC_SESION.idusuario(0);\n  utiliglpi.ajustaCCOPagoCorrecto(\n    '{{FECHA}}',\n    '{{ENTIDAD}}',\n    '{{N28}}',\n    {{IMPORTE}},\n    '{{IDPETITPV}}',\n    '{{FRAGMENTO_CCO}}',\n    {{GLPI}}\n  );\nEND;\n/",
+    "checkQueries": [
+      "SELECT * FROM PAGO WHERE IDPETITPV = '{{IDPETITPV}}';",
+      "SELECT * FROM PAGO WHERE N28 = '{{N28}}';"
+    ],
+    "tidExamples": ["1530120", "1531133", "1533634", "1536327", "1537277", "1537314", "1538877"]
+  },
+  {
+    "id": "PASARELA_FN",
+    "label": "Pasarela de Pagos — Actualización a FN",
+    "keywords": ["fn", "finalizado", "estado fn", "actualizar fn", "pasarela", "pago finalizado"],
+    "area": "FRONTALES",
+    "ambito": "PASARELADEPAGO",
+    "priority": "alta",
+    "solution": "Actualizar PAGO.CODESTADO='FN' y lanzar job AVISO_ERROR_NOTI_PAGO_ENTIDAD para notificar a la entidad.",
+    "sqlTemplate": "-- Actualización estado FN Pasarela de Pagos\nSET SERVEROUTPUT ON;\nDECLARE\n  referencia_   PAGO.IDPETITPV%TYPE := '{{IDPETITPV}}';\n  n28DeCajamar_ PAGO.N28%TYPE       := TRIM('{{N28}}');\n  glpi_         PLS_INTEGER         := {{GLPI}};\n  n28_          PAGO.N28%TYPE;\nBEGIN\n  referencia_ := LOWER(referencia_);\n  UPDATE PAGO SET CODESTADO = 'FN', FECESTADO = SYSDATE WHERE IDPETITPV = referencia_;\n  DBMS_OUTPUT.PUT_LINE('Actualizado estado FN: '||SQL%ROWCOUNT||' fila(s)');\nROLLBACK;\nEND;\n/\nexec dbms_scheduler.run_job(job_name => 'AVISO_ERROR_NOTI_PAGO_ENTIDAD');\n/",
+    "checkQueries": [
+      "SELECT IDPETITPV, CODESTADO, FECESTADO, N28, IMPORTE FROM PAGO WHERE IDPETITPV = LOWER('{{IDPETITPV}}');"
+    ],
+    "tidExamples": ["1529832", "1533634", "1536327", "1539644", "1542650", "1547048"]
+  },
+  {
+    "id": "PASARELA_PA",
+    "label": "Pasarela de Pagos — Actualización a PA",
+    "keywords": ["pa", "estado pa", "actualizar pa", "pasarela", "pago anticipado"],
+    "area": "FRONTALES",
+    "ambito": "PASARELADEPAGO",
+    "priority": "alta",
+    "solution": "Actualizar PAGO.CODESTADO='PA' usando IDPAGO y verificando N28.",
+    "sqlTemplate": "-- Actualización estado PA Pasarela de Pagos\nSET SERVEROUTPUT ON;\nDECLARE\n  idPago_       PAGO.IDPAGO%TYPE     := {{IDPAGO}};\n  glpi_         PLS_INTEGER          := {{GLPI}};\nBEGIN\n  UPDATE PAGO SET CODESTADO = 'PA', FECESTADO = SYSDATE WHERE IDPAGO = idPago_;\n  DBMS_OUTPUT.PUT_LINE('Actualizado estado PA: '||SQL%ROWCOUNT||' fila(s)');\nROLLBACK;\nEND;\n/",
+    "checkQueries": [
+      "SELECT IDPAGO, CODESTADO, FECESTADO, N28, IMPORTE FROM PAGO WHERE IDPAGO = {{IDPAGO}};"
+    ],
+    "tidExamples": ["1547561"]
+  },
+  {
+    "id": "MODELO_620_ESTADO",
+    "label": "Modelo 620 — Actualizar estado solicitud (PPFDATOS.IDESTADO)",
+    "keywords": ["modelo 620", "620", "idestado", "ppfdatos", "estado solicitud", "pagado", "estado pagado"],
+    "area": "FRONTALES",
+    "ambito": "PAETRIBUTOS",
+    "priority": "alta",
+    "solution": "Actualizar PPFDATOS.IDESTADO=9 (pagado) para el IDDATOS de la solicitud.",
+    "sqlTemplate": "-- Actualizar estado solicitud Modelo 620\nSET SERVEROUTPUT ON\nBEGIN\n  UPDATE PPFDATOS SET IDESTADO = 9 WHERE IDDATOS = {{IDDATOS}};\n  DBMS_OUTPUT.put_line('operaciones actualizadas: '||SQL%ROWCOUNT);\nROLLBACK;\nEND;\n/\nSELECT * FROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};",
+    "checkQueries": [
+      "SELECT IDDATOS, IDESTADO, CODFORM, CODSOL, DNISOLICITANTE FROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};",
+      "SELECT IDDATOS, IDESTADO, CODFORM FROM PPFDATOS WHERE CODSOL = '{{CODSOL}}' ORDER BY IDDATOS DESC;"
+    ],
+    "tidExamples": ["1511935", "1514169", "1530381", "1537539", "1539614", "1559652"]
+  },
+  {
+    "id": "MODELO_620_JSON",
+    "label": "Modelo 620 — Reconstruir JSON CLOB",
+    "keywords": ["modelo 620", "620", "json", "clob", "json clob", "reconstru", "datos incorrectos", "reconstrucción"],
+    "area": "FRONTALES",
+    "ambito": "PAETRIBUTOS",
+    "priority": "alta",
+    "solution": "Reconstruir el JSON CLOB del Modelo 620 en PPFDATOS.",
+    "sqlTemplate": "-- Reconstruir JSON CLOB Modelo 620 en PPFDATOS\nSET SERVEROUTPUT ON;\nDECLARE\n  json   clob;\n  stra   clob;\n  strb   clob;\n  idDatos_  PPFDATOS.IDDATOS%TYPE := {{IDDATOS}};\nBEGIN\n  stra := '{{JSON_PARTE_A}}';\n  strb := '{{JSON_PARTE_B}}';\n  json := stra || strb;\n  UPDATE PPFDATOS SET JSON = json WHERE IDDATOS = idDatos_;\n  DBMS_OUTPUT.put_line('JSON actualizado: '||SQL%ROWCOUNT||' fila(s)');\nROLLBACK;\nEND;\n/\nSELECT IDDATOS, IDESTADO, SUBSTR(JSON,1,200) JSON_PREVIEW FROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};",
+    "checkQueries": [
+      "SELECT IDDATOS, IDESTADO, CODFORM, CODSOL, SUBSTR(JSON,1,500) JSON_PREVIEW FROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};"
+    ],
+    "tidExamples": ["1511935", "1530381", "1537539", "1539614"]
+  },
+  {
+    "id": "MODELO_600_JSON",
+    "label": "Modelo 600 — Reconstruir JSON CLOB",
+    "keywords": ["modelo 600", "600", "json", "clob", "reconstru", "datos incorrectos"],
+    "area": "FRONTALES",
+    "ambito": "PAETRIBUTOS",
+    "priority": "alta",
+    "solution": "Reconstruir el JSON CLOB del Modelo 600 en PPFDATOS.",
+    "sqlTemplate": "-- Reconstruir JSON CLOB Modelo 600 en PPFDATOS\nSET SERVEROUTPUT ON;\nDECLARE\n  json   clob;\n  stra   clob;\n  strb   clob;\n  idDatos_  PPFDATOS.IDDATOS%TYPE := {{IDDATOS}};\nBEGIN\n  stra := '{{JSON_PARTE_A}}';\n  strb := '{{JSON_PARTE_B}}';\n  json := stra || strb;\n  UPDATE PPFDATOS SET JSON = json WHERE IDDATOS = idDatos_;\n  DBMS_OUTPUT.put_line('JSON actualizado: '||SQL%ROWCOUNT||' fila(s)');\nROLLBACK;\nEND;\n/",
+    "checkQueries": [
+      "SELECT IDDATOS, IDESTADO, CODFORM, CODSOL, SUBSTR(JSON,1,500) FROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};"
+    ],
+    "tidExamples": ["1532583", "1559306", "1559710", "1559727", "1560100"]
+  },
+  {
+    "id": "MODELO_651_JSON",
+    "label": "Modelo 651 — Reconstruir JSON CLOB",
+    "keywords": ["modelo 651", "651", "json", "clob"],
+    "area": "FRONTALES",
+    "ambito": "PAETRIBUTOS",
+    "priority": "alta",
+    "solution": "Reconstruir el JSON CLOB del Modelo 651 en PPFDATOS.",
+    "sqlTemplate": "-- Reconstruir JSON CLOB Modelo 651 en PPFDATOS\nSET SERVEROUTPUT ON;\nDECLARE\n  json   clob;\n  stra   clob;\n  idDatos_  PPFDATOS.IDDATOS%TYPE := {{IDDATOS}};\nBEGIN\n  stra := '{{JSON_PARTE_A}}';\n  json := stra;\n  UPDATE PPFDATOS SET JSON = json WHERE IDDATOS = idDatos_;\n  DBMS_OUTPUT.put_line('JSON actualizado: '||SQL%ROWCOUNT||' fila(s)');\nROLLBACK;\nEND;\n/",
+    "checkQueries": [
+      "SELECT IDDATOS, IDESTADO, CODFORM, CODSOL FROM PPFDATOS WHERE IDDATOS = {{IDDATOS}};"
+    ],
+    "tidExamples": ["1559836", "1565516"]
+  },
+  {
+    "id": "IVTM_PERMISOS",
+    "label": "IVTM — Alta de usuarios en grupo de acceso (GRUPOUSUA)",
+    "keywords": ["ivtm", "grupo", "permiso", "acceso", "grupousua", "permigru", "usuario", "alta usuario"],
+    "area": "ARECA",
+    "ambito": "IVTM",
+    "priority": "media",
+    "solution": "Identificar el grupo de acceso al formulario (PERMIGRU) y hacer INSERT en GRUPOUSUA.",
+    "sqlTemplate": "INSERT INTO GRUPOUSUA (COD_GRUPO, COD_USUA) VALUES ('{{COD_GRUPO}}', '{{COD_USUA}}');\nCOMMIT;",
+    "checkQueries": [
+      "SELECT GU.COD_GRUPO, GU.COD_USUA FROM GRUPOUSUA GU WHERE GU.COD_USUA = '{{COD_USUA}}';"
+    ],
+    "tidExamples": ["1556840"]
+  },
+  {
+    "id": "SIRA_NOTIFICACIONES",
+    "label": "SIRA / Notificaciones — Error en envío o tramitación",
+    "keywords": ["sira", "sicer", "notificacion", "notificaciones", "friopeti", "frioerror", "correo", "lote", "deh", "correos", "apremio", "embargo"],
+    "area": "ARECA",
+    "ambito": "SIRA",
+    "priority": "alta",
+    "solution": "Revisar estado en FRIOPETI/FRIOERROR. Verificar tipo de recurso no parametrizado en TIPODEUDA.",
+    "sqlTemplate": "-- Diagnóstico SIRA/Notificaciones\nSELECT * FROM CORREO WHERE EJE_CORREO = {{EJE_CORREO}} AND NUM_CORREO IN ({{NUM_CORREO}}) ORDER BY AUD_FECHA DESC;\nSELECT * FROM FRIOERROR WHERE EJE_PETI = {{EJE_CORREO}} AND NUM_PETI IN ({{NUM_PETI}}) ORDER BY 2 DESC;",
+    "checkQueries": [
+      "SELECT * FROM CORREO WHERE EJE_CORREO={{EJE_CORREO}} AND NUM_CORREO={{NUM_CORREO}};"
+    ],
+    "tidExamples": ["1549330", "1556318", "1545681", "1558612"]
+  },
+  {
+    "id": "DOMI_PLAZOS",
+    "label": "Domiciliaciones — Problemas con plazos, cintas o fechas",
+    "keywords": ["domiciliacion", "domiciliaciones", "cinta", "plazo", "plazos", "fecha efectos", "bonificacion", "saldo", "recibo domiciliado"],
+    "area": "ARECA",
+    "ambito": "DOMI",
+    "priority": "media",
+    "solution": "Según el sub-tipo: actualizar número de plazos, corregir fecha de efectos, regenerar cinta o anular domiciliación.",
+    "sqlTemplate": "SELECT * FROM DOMIDOM WHERE DNI_NIE = '{{DNI}}' ORDER BY FEC_DOMICILIACION DESC;\nSELECT * FROM DOMICINTA WHERE NUM_CINTA = {{NUM_CINTA}};",
+    "checkQueries": [
+      "SELECT * FROM DOMIDOM WHERE DNI_NIE = '{{DNI}}' ORDER BY FEC_DOMICILIACION DESC;"
+    ],
+    "tidExamples": ["1490615", "1522060", "1524611", "1538128", "1557069"]
+  },
+  {
+    "id": "PADRONES",
+    "label": "Padrones — Alta o actualización de padrón (PEPAORI, TRILOCA)",
+    "keywords": ["padron", "padrón", "pepaori", "triloca", "basura", "ibo", "ibi", "vado", "alta padrón", "tarifa"],
+    "area": "ARECA",
+    "ambito": "PADRONES",
+    "priority": "media",
+    "solution": "Verificar tarifas en TRILOCA y preparar INSERT en PEPAORI.",
+    "sqlTemplate": "SELECT * FROM TRILOCA WHERE COD_MUNI = '{{COD_MUNI}}' AND COD_CONCEPTO = '{{CONCEPTO}}';\nSELECT * FROM PEPAORI WHERE DNI_NIE = '{{DNI}}' AND COD_CONCEPTO = '{{CONCEPTO}}';",
+    "checkQueries": [
+      "SELECT * FROM PEPAORI WHERE DNI_NIE='{{DNI}}' AND COD_CONCEPTO='{{CONCEPTO}}';"
+    ],
+    "tidExamples": ["1512174", "1512194", "1513516", "1522994", "1547226"]
+  },
+  {
+    "id": "GENERAL",
+    "label": "Consulta / incidencia no clasificada",
+    "keywords": [],
+    "area": "AMBOS",
+    "ambito": "GENERAL",
+    "priority": "baja",
+    "solution": "Revisar manualmente. Escalar al grupo de soporte de segundo nivel si es necesario.",
+    "sqlTemplate": null,
+    "checkQueries": [],
+    "tidExamples": []
+  }
+]

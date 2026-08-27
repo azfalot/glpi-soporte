@@ -60,28 +60,19 @@ app.get("/api/jobs", (_req, res) => {
   res.json(queue.list());
 });
 
-// ── Caché de tickets procesados ──────────────────────────────────────────────
-// Mantiene en memoria el estado completo de cada ticket ya procesado.
-// Estructura: Map<ticketId, { ticket, diag, jtras, drafts, proposal, status }>
-const ticketCache = new Map();
+const ticketStore = require("./storage/ticketStore");
 
 function cacheGet(ticketId) {
-  return ticketCache.get(String(ticketId)) || null;
+  return ticketStore.get(ticketId);
 }
 function cacheSet(ticketId, key, value) {
-  const id = String(ticketId);
-  if (!ticketCache.has(id)) ticketCache.set(id, { status: "running" });
-  ticketCache.get(id)[key] = value;
+  ticketStore.set(ticketId, key, value);
 }
 function cacheDone(ticketId) {
-  const c = ticketCache.get(String(ticketId));
-  if (c) c.status = "done";
+  ticketStore.done(ticketId);
 }
 function cacheError(ticketId, err) {
-  const id = String(ticketId);
-  if (!ticketCache.has(id)) ticketCache.set(id, {});
-  ticketCache.get(id).status = "error";
-  ticketCache.get(id).error  = err;
+  ticketStore.error(ticketId, err);
 }
 
 // ── Pipeline completo de un ticket (reutilizable) ─────────────────────────────
@@ -91,7 +82,7 @@ function cacheError(ticketId, err) {
  * @param {boolean}       keepOpen   si true, NO cierra Firefox al terminar (para pipelines en cadena)
  */
 async function runTicketPipeline(ticketId, progress, keepOpen = false) {
-  ticketCache.set(String(ticketId), { status: "running" });
+  ticketStore.init(ticketId);
   try {
     // PASO 1: Leer ticket de GLPI
     progress("glpi", "Leyendo ticket de GLPI...");
@@ -209,11 +200,7 @@ app.get("/api/ticket/:id/cache", (req, res) => {
 
 // Devuelve el estado de todos los tickets en caché (status por ticketId)
 app.get("/api/tickets/cache-status", (_req, res) => {
-  const result = {};
-  for (const [id, c] of ticketCache.entries()) {
-    result[id] = c.status || "unknown";
-  }
-  res.json(result);
+  res.json(ticketStore.getAllStatuses());
 });
 
 // ── GLPI Enriquecimiento ─────────────────────────────────────────────────────
@@ -277,7 +264,7 @@ function scheduleTicketPipelines(tickets) {
     const id = t.id;
     const isLast = i === pending.length - 1;
     chain = chain.then(() => {
-      ticketCache.set(String(id), { status: "running" });
+      ticketStore.init(id);
       queue.broadcast({ type: "ticket:cached", ticketId: id, status: "running" });
       return queue.run(
         `ticket-${id}`,
@@ -354,6 +341,15 @@ app.get("/api/kb/categories", (_req, res) => {
   res.json(kb.kbCategories().map(c => ({
     id: c.id, label: c.label, area: c.area, ambito: c.ambito, priority: c.priority
   })));
+});
+
+app.post("/api/kb/reload", (_req, res) => {
+  try {
+    const rules = kb.reloadRules();
+    res.json({ ok: true, count: rules.length, message: `${rules.length} reglas KB recargadas correctamente` });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 app.get("/api/kb/search", (req, res) => {

@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8"/>
@@ -199,12 +199,18 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
 <!-- Top bar -->
 <div class="topbar">
   <h1>🔧 Soporte Incidencias LIVE</h1>
+  <div class="topbar-badge" id="badge-mode" style="cursor:pointer;padding:4px 10px;background:var(--bg3);border-radius:var(--r);user-select:none" onclick="toggleDataMode()" title="Clic para alternar entre Modo Simulación y Conexión Real">
+    <span class="status-dot ok" id="dot-mode"></span> <strong id="mode-text">MOCK (Offline)</strong>
+  </div>
   <div class="topbar-badge" id="badge-glpi">
     <span class="status-dot" id="dot-glpi"></span> GLPI
   </div>
   <div class="topbar-badge" id="badge-jtras">
     <span class="status-dot" id="dot-jtras"></span> jTraspaso
   </div>
+  <button class="btn btn-ghost" id="btn-reload-kb" onclick="reloadKbRules()" title="Recargar reglas KB de data/kb_rules.json" style="font-size:.7rem;padding:3px 8px">
+    🔄 Recargar KB
+  </button>
   <div id="bg-status" style="font-size:.7rem;color:var(--txt2)"></div>
 </div>
 
@@ -226,6 +232,13 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
       <div class="input-row">
         <input id="manual-id" placeholder="Buscar por ID…" type="number"/>
         <button class="btn btn-ghost" id="btn-manual">→</button>
+      </div>
+      <!-- Filtros rápidos de bandeja -->
+      <div class="filter-row" style="display:flex;gap:4px;margin-top:8px;overflow-x:auto">
+        <button class="pill p-blue filter-btn active" data-filter="all" onclick="filterBandeja('all', this)" style="border:none;cursor:pointer">Todos</button>
+        <button class="pill filter-btn" data-filter="done" onclick="filterBandeja('done', this)" style="border:none;cursor:pointer;background:var(--bg3);color:var(--ok)">✓ Listos</button>
+        <button class="pill filter-btn" data-filter="running" onclick="filterBandeja('running', this)" style="border:none;cursor:pointer;background:var(--bg3);color:var(--warn)">◌ Proc.</button>
+        <button class="pill filter-btn" data-filter="error" onclick="filterBandeja('error', this)" style="border:none;cursor:pointer;background:var(--bg3);color:var(--err)">✕ Error</button>
       </div>
     </div>
     <div class="ticket-list" id="ticket-list">
@@ -1018,25 +1031,42 @@ function renderJtrasSkip(reason) {
     `<div class="alert a-info">${esc(reason)}</div>`, false, "sin datos identificativos");
 }
 
+function hasUnfilledPlaceholders(text) {
+  return /\{\{[A-Za-z0-9_]+\}\}/.test(text) || /\bNNNNNNN\b/.test(text) || /\bPEGAR_JSON_AQUI\b/.test(text);
+}
+
 // ── Render borradores — ABIERTOS por defecto ──────────────────────────────
 function renderDrafts(d) {
   const { classification: c, task, followup } = d;
 
+  const taskWarn = hasUnfilledPlaceholders(task);
+  const followWarn = hasUnfilledPlaceholders(followup);
+
+  const taskBadge = taskWarn
+    ? `<span class="pill p-yellow">⚠️ Variables pendientes</span>`
+    : `<span class="pill p-green">✅ Completado</span>`;
+
+  const followBadge = followWarn
+    ? `<span class="pill p-yellow">⚠️ Variables pendientes</span>`
+    : `<span class="pill p-green">✅ Completado</span>`;
+
   const taskBody = `
-    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <div>${taskBadge}</div>
       <button class="btn btn-ghost" style="font-size:.72rem" onclick="copyDraft('draft-task')">📋 Copiar TAREA</button>
     </div>
     <textarea class="draft-box" id="draft-task">${esc(task)}</textarea>`;
 
   const followBody = `
-    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <div>${followBadge}</div>
       <button class="btn btn-ghost" style="font-size:.72rem" onclick="copyDraft('draft-followup')">📋 Copiar</button>
     </div>
     <textarea class="draft-box" id="draft-followup">${esc(followup)}</textarea>`;
 
   setSection("sec-drafts", `<div id="sec-drafts-wrap" style="display:flex;flex-direction:column;gap:12px">
-    ${colCard("sec-draft-task", "📝 Borrador TAREA", taskBody, true)}
-    ${colCard("sec-draft-followup", "💬 Borrador SEGUIMIENTO (al ciudadano)", followBody, true)}
+    ${colCard("sec-draft-task", "📝 Borrador TAREA", taskBody, true, taskWarn ? "⚠️ Revisar" : "✓ Listo")}
+    ${colCard("sec-draft-followup", "💬 Borrador SEGUIMIENTO (al ciudadano)", followBody, true, followWarn ? "⚠️ Revisar" : "✓ Listo")}
   </div>`);
 }
 
@@ -1119,7 +1149,88 @@ function renderEnrichResult(r) {
     : `<div class="alert a-warn">⚠ Errores: ${(r.errors||[]).map(esc).join(", ")}</div>`;
 }
 
-// Actualizar openTicket para incluir step enrich
+// ── Filtros rápidos de bandeja ──────────────────────────────────────────────
+let currentFilter = "all";
+
+function filterBandeja(status, btn) {
+  currentFilter = status;
+  document.querySelectorAll(".filter-btn").forEach(b => {
+    b.classList.remove("active", "p-blue");
+    b.style.background = "var(--bg3)";
+  });
+  btn.classList.add("active", "p-blue");
+  btn.style.background = "";
+
+  document.querySelectorAll(".ticket-item").forEach(item => {
+    const st = item.dataset.status || "pending";
+    if (status === "all") {
+      item.style.display = "";
+    } else if (status === "done") {
+      item.style.display = st === "done" ? "" : "none";
+    } else if (status === "running") {
+      item.style.display = (st === "running" || st === "pending") ? "" : "none";
+    } else if (status === "error") {
+      item.style.display = st === "error" ? "" : "none";
+    }
+  });
+}
+
+// ── Modo de datos (MOCK / LIVE) ─────────────────────────────────────────────
+async function checkDataMode() {
+  try {
+    const r = await fetch("/api/mode");
+    const d = await r.json();
+    updateModeUI(d.mode);
+  } catch (_) {}
+}
+
+function updateModeUI(mode) {
+  const txt = document.getElementById("mode-text");
+  const dot = document.getElementById("dot-mode");
+  if (!txt || !dot) return;
+  if (mode === "mock") {
+    txt.textContent = "MOCK (Offline)";
+    dot.className = "status-dot ok";
+  } else {
+    txt.textContent = "LIVE (Producción)";
+    dot.className = "status-dot running";
+  }
+}
+
+async function toggleDataMode() {
+  try {
+    const r = await fetch("/api/mode");
+    const d = await r.json();
+    const newMode = d.mode === "mock" ? "live" : "mock";
+    const res = await fetch("/api/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: newMode })
+    });
+    const updated = await res.json();
+    updateModeUI(updated.mode);
+    alert(`Modo cambiado a: ${updated.mode.toUpperCase()}.\nPulsa 'Recargar bandeja' para actualizar la lista.`);
+  } catch (e) {
+    alert("Error al cambiar modo: " + e.message);
+  }
+}
+
+async function reloadKbRules() {
+  const btn = document.getElementById("btn-reload-kb");
+  if (btn) { btn.disabled = true; btn.textContent = "🔄..."; }
+  try {
+    const r = await fetch("/api/kb/reload", { method: "POST" });
+    const d = await r.json();
+    alert(d.message || "Reglas KB recargadas");
+  } catch (e) {
+    alert("Error recargando reglas: " + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🔄 Recargar KB"; }
+  }
+}
+
+// Inicializar modo de datos al cargar
+checkDataMode();
 </script>
 </body>
 </html>

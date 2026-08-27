@@ -2,10 +2,8 @@
 
 /**
  * Extrae datos clave (DNI/NIE, matrícula, CODSOL, procedimiento, fecha)
- * del texto del ticket (título + timeline) y lanza la query en jTraspaso.
+ * del texto del ticket (título + timeline).
  */
-
-const { queryJTraspaso } = require("./db");
 
 // ── Patrones ───────────────────────────────────────────────────────────────
 const RE_DNI  = /\b(\d{8}[A-Z])\b/gi;
