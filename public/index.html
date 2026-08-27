@@ -50,14 +50,26 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
                  border-radius:6px;padding:5px 8px;color:var(--txt);font-size:.8rem;min-width:0}
 .ticket-list{overflow-y:auto;flex:1}
 .ticket-item{padding:10px 14px;border-bottom:1px solid var(--bg3);cursor:pointer;
-             transition:background .12s;position:relative}
+             transition:background .12s,opacity .3s;position:relative}
 .ticket-item:hover{background:var(--bg3)}
 .ticket-item.active{background:#1e3a5f;border-left:3px solid var(--acc)}
 .ticket-item .tid{font-size:.68rem;color:var(--acc2);font-weight:700}
 .ticket-item .ttitle{font-size:.78rem;margin-top:2px;
-                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                     transition:font-weight .2s,color .2s}
+/* Pendiente/cargando: translúcido */
+.ticket-item[data-status="pending"] .ttitle,
+.ticket-item[data-status="running"] .ttitle { opacity:.45; font-weight:400; }
+/* Listo: negrita fuerte */
+.ticket-item[data-status="done"] .ttitle    { opacity:1;   font-weight:700; color:var(--txt); }
+.ticket-item[data-status="error"] .ttitle   { opacity:.7;  font-weight:400; color:var(--err); }
 .ticket-item .tstate{position:absolute;right:10px;top:50%;transform:translateY(-50%);
                      width:8px;height:8px;border-radius:50%}
+.ticket-glpi-link{opacity:0;transition:opacity .15s;margin-left:auto;flex-shrink:0;
+                  font-size:.68rem;color:var(--txt2);text-decoration:none;padding:2px 5px;
+                  border-radius:4px;background:var(--bg3)}
+.ticket-item:hover .ticket-glpi-link{opacity:1}
+.ticket-glpi-link:hover{color:var(--acc2);background:var(--bg4)}
 
 /* ── Main area ── */
 .empty{display:flex;align-items:center;justify-content:center;
@@ -194,6 +206,9 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
           <span id="refresh-ico">⟳</span>
         </button>
       </div>
+      <div id="bandeja-progress-row" style="font-size:.68rem;color:var(--txt2);margin-bottom:6px;min-height:14px">
+        <span id="bandeja-loading-detail"></span>
+      </div>
       <div class="input-row">
         <input id="manual-id" placeholder="Buscar por ID…" type="number"/>
         <button class="btn btn-ghost" id="btn-manual">→</button>
@@ -203,7 +218,6 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
       <div id="bandeja-loading" style="display:flex;flex-direction:column;align-items:center;gap:10px;padding:30px 14px;color:var(--txt2)">
         <span class="spin" style="width:18px;height:18px;border-width:2px"></span>
         <div style="font-size:.8rem;text-align:center">Conectando con GLPI…</div>
-        <div id="bandeja-loading-detail" style="font-size:.7rem;color:var(--bg4);text-align:center"></div>
       </div>
       <div id="bandeja-items" style="display:none"></div>
     </div>
@@ -279,23 +293,11 @@ evtSource.addEventListener("open", async () => {
     const r = await fetch("/api/tickets/cache-status");
     const s = await r.json();
     Object.assign(cacheStatus, s);
-    // Actualizar indicadores en bandeja
     for (const [id, st] of Object.entries(s)) {
       updateTicketBadge(id, st);
     }
   } catch(_) {}
 });
-
-// Polling ligero del estado GLPI
-async function pollGlpiStatus() {
-  try {
-    const r = await fetch("/api/glpi/status");
-    const s = await r.json();
-    if (s.isReady) setDot("glpi", "ok");
-  } catch(_) {}
-  setTimeout(pollGlpiStatus, 8000);
-}
-pollGlpiStatus();
 
 
 function setProgress(text, active = true) {
@@ -326,13 +328,13 @@ function handleEvent(ev) {
   switch (ev.type) {
     case "job:start":
       if (ev.jobId === "load-tickets-startup" || ev.jobId === "load-tickets") {
-        setBandejaDetail("Conectando con GLPI…");
+        setBandejaConnecting("Conectando con GLPI…");
       }
       setProgress(ev.label);
       break;
     case "job:progress":
       if (ev.jobId === "load-tickets-startup" || ev.jobId === "load-tickets") {
-        setBandejaDetail(ev.detail || ev.step || "");
+        setBandejaConnecting(ev.detail || ev.step || "");
       } else if (ev.jobId && ev.jobId.startsWith("ticket-")) {
         const tid = ev.jobId.replace("ticket-","");
         const done = pendingTickets.filter(t => cacheStatus[t.id]==="done"||cacheStatus[t.id]==="error").length;
@@ -511,65 +513,73 @@ function setBandejaDetail(text) {
   if (el) el.textContent = text;
 }
 
+// El spinner inicial del sidebar-head muestra "Conectando..." hasta que llegan tickets
+function setBandejaConnecting(text) {
+  const loading = document.getElementById("bandeja-loading");
+  if (loading) {
+    const div = loading.querySelector("div");
+    if (div) div.textContent = text || "Conectando con GLPI…";
+  }
+}
+
 function renderBandeja(tickets) {
   document.getElementById("refresh-ico").className = "";
   document.getElementById("refresh-ico").textContent = "⟳";
   document.getElementById("btn-refresh").disabled = false;
   pendingTickets = tickets;
 
+  const items   = document.getElementById("bandeja-items");
+  const loading = document.getElementById("bandeja-loading");
+
   if (!tickets.length) {
-    document.getElementById("bandeja-loading").style.display = "none";
-    document.getElementById("bandeja-items").style.display = "";
-    document.getElementById("bandeja-items").innerHTML =
-      '<div class="empty">Sin tickets pendientes</div>';
+    loading.style.display = "none";
+    items.style.display = "";
+    items.innerHTML = '<div class="empty">Sin tickets pendientes</div>';
     return;
   }
 
-  // Mostrar spinner mientras se procesan
-  document.getElementById("bandeja-loading").style.display = "flex";
-  document.getElementById("bandeja-items").style.display = "none";
-  setBandejaDetail(`Procesando tickets en segundo plano…`);
+  // Mostrar tickets INMEDIATAMENTE con aspecto translúcido (pending)
+  // Se pondrán en negrita solos cuando su caché esté lista via updateTicketBadge
+  items.innerHTML = tickets.map(t => {
+    const st = cacheStatus[t.id] || "pending";
+    return buildTicketItem(t, st);
+  }).join("");
+  items.querySelectorAll(".ticket-item").forEach(el => {
+    el.onclick = (e) => {
+      if (e.target.closest(".ticket-glpi-link")) return;
+      openTicket(el.dataset.id);
+    };
+  });
+
+  // Ocultar spinner grande, mostrar lista
+  loading.style.display = "none";
+  items.style.display   = "";
+
   checkBandejaReady();
+}
+
+function buildTicketItem(t, st) {
+  const glpiUrl = `https://glpi.carm.es/front/ticket.form.php?id=${encodeURIComponent(t.id)}`;
+  return `<div class="ticket-item" data-id="${esc(t.id)}" data-status="${esc(st)}">
+    <div style="display:flex;align-items:center;gap:5px">
+      <div class="tid">#${esc(t.id)}</div>
+      <span class="ticket-cache-badge" id="badge-${esc(t.id)}" data-status="${st}">${badgeIcon(st)}</span>
+      <a class="ticket-glpi-link" href="${esc(glpiUrl)}" target="_blank" title="Abrir en GLPI">↗</a>
+    </div>
+    <div class="ttitle" title="${esc(t.title)}">${esc(t.title||"(sin título)")}</div>
+    ${t.elementos ? `<div style="font-size:.68rem;color:var(--acc2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.elementos)}</div>` : ""}
+  </div>`;
 }
 
 function checkBandejaReady() {
   if (!pendingTickets.length) return;
-  const done  = pendingTickets.filter(t => cacheStatus[t.id] === "done" || cacheStatus[t.id] === "error").length;
+  const done  = pendingTickets.filter(t => cacheStatus[t.id]==="done"||cacheStatus[t.id]==="error").length;
   const total = pendingTickets.length;
-
-  // Actualizar texto de progreso
-  const loadingEl = document.getElementById("bandeja-loading");
-  if (loadingEl && loadingEl.style.display !== "none") {
-    setBandejaDetail(`${done} de ${total} ticket${total>1?"s":""} preparado${done!==1?"s":""}`);
-  }
-
-  if (done >= total) {
-    // Todos listos — mostrar bandeja
-    showBandejaItems();
-  }
+  setBandejaDetail(`${done} de ${total} ticket${total>1?"s":""} preparado${done!==1?"s":""}`);
 }
 
-function showBandejaItems() {
-  const items = document.getElementById("bandeja-items");
-  const loading = document.getElementById("bandeja-loading");
-  items.innerHTML = pendingTickets.map(t => {
-    const st = cacheStatus[t.id] || "pending";
-    return `<div class="ticket-item" data-id="${esc(t.id)}">
-      <div style="display:flex;align-items:center;gap:6px">
-        <div class="tid">#${esc(t.id)}</div>
-        <span class="ticket-cache-badge" id="badge-${esc(t.id)}" data-status="${st}"
-          title="${st}">${badgeIcon(st)}</span>
-      </div>
-      <div class="ttitle" title="${esc(t.title)}">${esc(t.title||"(sin título)")}</div>
-      ${t.elementos ? `<div style="font-size:.68rem;color:var(--acc2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.elementos)}</div>` : ""}
-    </div>`;
-  }).join("");
-  items.querySelectorAll(".ticket-item").forEach(el => {
-    el.onclick = () => openTicket(el.dataset.id);
-  });
-  loading.style.display = "none";
-  items.style.display = "";
-}
+// showBandejaItems ya no se usa — la bandeja se muestra desde renderBandeja
+function showBandejaItems() {}
 
 function badgeIcon(status) {
   if (status === "done")    return `<span style="color:var(--ok);font-size:.7rem" title="Listo">✓</span>`;
@@ -580,9 +590,12 @@ function badgeIcon(status) {
 
 function updateTicketBadge(ticketId, status) {
   cacheStatus[ticketId] = status;
-  const el = document.getElementById("badge-" + ticketId);
-  if (el) { el.dataset.status = status; el.innerHTML = badgeIcon(status); }
-  // Comprobar si ya están todos listos para mostrar la bandeja
+  // Actualizar badge del spinner/check
+  const badge = document.getElementById("badge-" + ticketId);
+  if (badge) { badge.dataset.status = status; badge.innerHTML = badgeIcon(status); }
+  // Actualizar data-status del item para que el CSS aplique translúcido/negrita
+  const item = document.querySelector(`.ticket-item[data-id="${ticketId}"]`);
+  if (item) item.dataset.status = status;
   checkBandejaReady();
 }
 
