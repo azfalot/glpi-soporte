@@ -65,11 +65,25 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
 .ticket-item[data-status="error"] .ttitle   { opacity:.7;  font-weight:400; color:var(--err); }
 .ticket-item .tstate{position:absolute;right:10px;top:50%;transform:translateY(-50%);
                      width:8px;height:8px;border-radius:50%}
-.ticket-glpi-link{opacity:0;transition:opacity .15s;margin-left:auto;flex-shrink:0;
-                  font-size:.68rem;color:var(--txt2);text-decoration:none;padding:2px 5px;
-                  border-radius:4px;background:var(--bg3)}
+.ticket-glpi-link{
+  opacity:0;transition:opacity .15s;margin-left:auto;flex-shrink:0;
+  font-size:.8rem;color:var(--txt2);text-decoration:none;
+  padding:3px 6px;border-radius:4px;background:transparent;
+  position:relative;line-height:1;
+}
 .ticket-item:hover .ticket-glpi-link{opacity:1}
-.ticket-glpi-link:hover{color:var(--acc2);background:var(--bg4)}
+.ticket-glpi-link:hover{color:var(--acc2)}
+/* Tooltip/placeholder al hacer hover sobre el ojo */
+.ticket-glpi-link::after{
+  content:attr(data-title);
+  position:absolute;left:calc(100% + 8px);top:50%;transform:translateY(-50%);
+  background:var(--bg2);border:1px solid var(--bg3);border-radius:6px;
+  padding:6px 10px;font-size:.72rem;color:var(--txt);white-space:nowrap;
+  pointer-events:none;opacity:0;transition:opacity .15s;z-index:100;
+  max-width:220px;overflow:hidden;text-overflow:ellipsis;
+  box-shadow:0 4px 12px rgba(0,0,0,.4);
+}
+.ticket-glpi-link:hover::after{opacity:1}
 
 /* ── Main area ── */
 .empty{display:flex;align-items:center;justify-content:center;
@@ -564,7 +578,8 @@ function buildTicketItem(t, st) {
     <div style="display:flex;align-items:center;gap:5px">
       <div class="tid">#${esc(t.id)}</div>
       <span class="ticket-cache-badge" id="badge-${esc(t.id)}" data-status="${st}">${badgeIcon(st)}</span>
-      <a class="ticket-glpi-link" href="${esc(glpiUrl)}" target="_blank" title="Abrir en GLPI">↗</a>
+      <a class="ticket-glpi-link" href="${esc(glpiUrl)}" target="_blank"
+         title="Ver en GLPI" data-title="🔗 #${esc(t.id)} — ${esc((t.title||'').substring(0,60))}">👁</a>
     </div>
     <div class="ttitle" title="${esc(t.title)}">${esc(t.title||"(sin título)")}</div>
     ${t.elementos ? `<div style="font-size:.68rem;color:var(--acc2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.elementos)}</div>` : ""}
