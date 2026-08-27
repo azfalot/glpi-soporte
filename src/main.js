@@ -28,91 +28,153 @@ app.get("/api/jobs", (_req, res) => {
   res.json(queue.list());
 });
 
-// ── Pipeline automático de ticket ────────────────────────────────────────────
-//
-// Al abrir un ticket la UI llama POST /api/ticket/process
-// El servidor lanza en background:
-//   1. readTicket (GLPI)          → SSE ticket:ready
-//   2. diagnose (extract + KB)    → SSE diag:ready
-//   3. jTraspaso diagnoseFull     → SSE jtraspaso:ready
-//   4. buildDrafts                → SSE draft:ready
-//
-// La UI solo muestra lo que va llegando por SSE.
+// ── Caché de tickets procesados ──────────────────────────────────────────────
+// Mantiene en memoria el estado completo de cada ticket ya procesado.
+// Estructura: Map<ticketId, { ticket, diag, jtras, drafts, proposal, status }>
+const ticketCache = new Map();
 
+function cacheGet(ticketId) {
+  return ticketCache.get(String(ticketId)) || null;
+}
+function cacheSet(ticketId, key, value) {
+  const id = String(ticketId);
+  if (!ticketCache.has(id)) ticketCache.set(id, { status: "running" });
+  ticketCache.get(id)[key] = value;
+}
+function cacheDone(ticketId) {
+  const c = ticketCache.get(String(ticketId));
+  if (c) c.status = "done";
+}
+function cacheError(ticketId, err) {
+  const id = String(ticketId);
+  if (!ticketCache.has(id)) ticketCache.set(id, {});
+  ticketCache.get(id).status = "error";
+  ticketCache.get(id).error  = err;
+}
+
+// ── Pipeline completo de un ticket (reutilizable) ─────────────────────────────
+async function runTicketPipeline(ticketId, progress) {
+  ticketCache.set(String(ticketId), { status: "running" });
+  try {
+    // PASO 1: Leer ticket de GLPI
+    progress("glpi", "Leyendo ticket de GLPI...");
+    let ticket;
+    try {
+      ticket = await glpi.readTicket(ticketId);
+    } catch (e) {
+      queue.broadcast({ type: "ticket:error", ticketId, error: e.message });
+      throw e;
+    }
+    cacheSet(ticketId, "ticket", ticket);
+    queue.broadcast({ type: "ticket:ready", ticketId, data: ticket });
+
+    // PASO 2: Extraer entidades + clasificar KB
+    progress("extract", "Extrayendo datos y clasificando...");
+    const entities  = extract.extractEntities(ticket);
+    const fullText  = [ticket.title || ""]
+      .concat((ticket.timeline || []).map(e => e.content || ""))
+      .join(" ");
+    const kbMatches = kb.kbSearch(fullText, 3);
+    const diagBase  = { entities, kbMatches, tramites: [], dbError: null };
+    cacheSet(ticketId, "diag", diagBase);
+    queue.broadcast({ type: "diag:ready", ticketId, data: diagBase });
+
+    // PASO 3: Consultar jTraspaso
+    const codsol = entities.codsol || null;
+    if (codsol || entities.dnis.length || entities.nies.length || entities.matriculas.length) {
+      const label = codsol
+        ? `CODSOL ${codsol}`
+        : `token (${entities.dnis[0] || entities.nies[0] || entities.matriculas[0]})`;
+      progress("jtraspaso", `Consultando jTraspaso — ${label}...`);
+      try {
+        const jtResult = await jtras.diagnoseFull(codsol, null, entities);
+        cacheSet(ticketId, "jtras", jtResult);
+        queue.broadcast({ type: "jtraspaso:ready", ticketId, codsol: jtResult.codsol, data: jtResult });
+        diagBase.jtraspasoResult = jtResult;
+        diagBase.ppfdatos   = jtResult.ppfdatos;
+        diagBase.pago       = jtResult.pago;
+        diagBase.eventos    = jtResult.eventos;
+        diagBase.clobParsed = jtResult.clobParsed;
+        if (jtResult.codsol && !codsol) entities.codsol = jtResult.codsol;
+      } catch (e) {
+        queue.broadcast({ type: "jtraspaso:error", ticketId, error: e.message });
+      }
+    } else {
+      queue.broadcast({ type: "jtraspaso:skip", ticketId, reason: "Sin datos identificativos en el ticket (CODSOL, DNI, matrícula)" });
+    }
+
+    // PASO 4: Generar borradores
+    progress("drafts", "Generando borradores TAREA y SEGUIMIENTO...");
+    const drafts = classify.buildDrafts(ticket, diagBase);
+    cacheSet(ticketId, "drafts", drafts);
+    queue.broadcast({ type: "draft:ready", ticketId, data: drafts });
+
+    // PASO 5: Propuesta enriquecimiento GLPI
+    progress("enrich", "Generando propuesta de enriquecimiento...");
+    const proposal = enrich.proposeEnrichment(ticket, diagBase);
+    cacheSet(ticketId, "proposal", proposal);
+    queue.broadcast({ type: "enrich:proposal", ticketId, data: proposal });
+
+    cacheDone(ticketId);
+    // Notificar a la bandeja que este ticket está listo
+    queue.broadcast({ type: "ticket:cached", ticketId, status: "done" });
+    return { ticketId, done: true };
+
+  } catch (e) {
+    cacheError(ticketId, e.message);
+    queue.broadcast({ type: "ticket:cached", ticketId, status: "error", error: e.message });
+    throw e;
+  } finally {
+    setImmediate(async () => {
+      await glpi.closeContext().catch(() => {});
+      await jtras.closeContext().catch(() => {});
+    });
+  }
+}
+
+// ── Pipeline automático de ticket ────────────────────────────────────────────
 app.post("/api/ticket/process", async (req, res) => {
   const { ticketId } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: "ticketId requerido" });
 
-  // Responder inmediatamente — el trabajo ocurre en background vía SSE
+  // Si ya está en caché y completo, devolver inmediatamente el estado
+  const cached = cacheGet(ticketId);
+  if (cached && cached.status === "done") {
+    res.json({ ok: true, ticketId, cached: true });
+    // Re-emitir todos los eventos cacheados para este cliente (nuevo SSE replay)
+    if (cached.ticket)   queue.broadcast({ type: "ticket:ready",     ticketId, data: cached.ticket });
+    if (cached.diag)     queue.broadcast({ type: "diag:ready",       ticketId, data: cached.diag });
+    if (cached.jtras)    queue.broadcast({ type: "jtraspaso:ready",  ticketId, codsol: cached.jtras.codsol, data: cached.jtras });
+    if (cached.drafts)   queue.broadcast({ type: "draft:ready",      ticketId, data: cached.drafts });
+    if (cached.proposal) queue.broadcast({ type: "enrich:proposal",  ticketId, data: cached.proposal });
+    return;
+  }
+
+  // Si ya está corriendo, solo responder OK (los eventos SSE ya están llegando)
+  if (cached && cached.status === "running") {
+    return res.json({ ok: true, ticketId, running: true });
+  }
+
   res.json({ ok: true, ticketId, message: "Procesando en background..." });
+  queue.run(`ticket-${ticketId}`, `Procesando ticket #${ticketId}`, (progress) =>
+    runTicketPipeline(ticketId, progress)
+  );
+});
 
-  queue.run(`ticket-${ticketId}`, `Leyendo ticket #${ticketId}`, async (progress) => {
-    try {
-      // ── PASO 1: Leer ticket de GLPI ──────────────────────────────────
-      progress("glpi", "Leyendo ticket de GLPI...");
-      let ticket;
-      try {
-        ticket = await glpi.readTicket(ticketId);
-      } catch (e) {
-        queue.broadcast({ type: "ticket:error", ticketId, error: e.message });
-        throw e;
-      }
-      queue.broadcast({ type: "ticket:ready", ticketId, data: ticket });
+// Devuelve el estado cacheado de un ticket (para reconexiones / cambio de vista)
+app.get("/api/ticket/:id/cache", (req, res) => {
+  const cached = cacheGet(req.params.id);
+  if (!cached) return res.json({ found: false });
+  res.json({ found: true, ...cached });
+});
 
-      // ── PASO 2: Extraer entidades + clasificar KB ────────────────────
-      progress("extract", "Extrayendo datos y clasificando...");
-      const entities  = extract.extractEntities(ticket);
-      const fullText  = [ticket.title || ""]
-        .concat((ticket.timeline || []).map(e => e.content || ""))
-        .join(" ");
-      const kbMatches = kb.kbSearch(fullText, 3);
-      const diagBase = { entities, kbMatches, tramites: [], dbError: null };
-      queue.broadcast({ type: "diag:ready", ticketId, data: diagBase });
-
-      // ── PASO 3: Consultar jTraspaso ──────────────────────────────────
-      const codsol = entities.codsol || null;
-      if (codsol || entities.dnis.length || entities.nies.length || entities.matriculas.length) {
-        const label = codsol ? `CODSOL ${codsol}` : `token (${entities.dnis[0] || entities.nies[0] || entities.matriculas[0]})`;
-        progress("jtraspaso", `Consultando jTraspaso — ${label}...`);
-        try {
-          const jtResult = await jtras.diagnoseFull(codsol, null, entities);
-          queue.broadcast({ type: "jtraspaso:ready", ticketId, codsol: jtResult.codsol, data: jtResult });
-          diagBase.jtraspasoResult = jtResult;
-          diagBase.ppfdatos  = jtResult.ppfdatos;
-          diagBase.pago      = jtResult.pago;
-          diagBase.eventos   = jtResult.eventos;
-          diagBase.clobParsed = jtResult.clobParsed;
-          // Actualizar codsol si se encontró por token
-          if (jtResult.codsol && !codsol) {
-            entities.codsol = jtResult.codsol;
-          }
-        } catch (e) {
-          queue.broadcast({ type: "jtraspaso:error", ticketId, error: e.message });
-        }
-      } else {
-        queue.broadcast({ type: "jtraspaso:skip", ticketId, reason: "Sin datos identificativos en el ticket (CODSOL, DNI, matrícula)" });
-      }
-
-      // ── PASO 4: Generar borradores ───────────────────────────────────
-      progress("drafts", "Generando borradores TAREA y SEGUIMIENTO...");
-      const drafts = classify.buildDrafts(ticket, diagBase);
-      queue.broadcast({ type: "draft:ready", ticketId, data: drafts });
-
-      // ── PASO 5: Propuesta de enriquecimiento GLPI ────────────────────
-      progress("enrich", "Generando propuesta de enriquecimiento...");
-      const proposal = enrich.proposeEnrichment(ticket, diagBase);
-      queue.broadcast({ type: "enrich:proposal", ticketId, data: proposal });
-
-      return { ticketId, done: true };
-
-    } finally {
-      // SIEMPRE cerrar Firefox al terminar el job (éxito O error)
-      setImmediate(async () => {
-        await glpi.closeContext().catch(() => {});
-        await jtras.closeContext().catch(() => {});
-      });
-    }
-  });
+// Devuelve el estado de todos los tickets en caché (status por ticketId)
+app.get("/api/tickets/cache-status", (_req, res) => {
+  const result = {};
+  for (const [id, c] of ticketCache.entries()) {
+    result[id] = c.status || "unknown";
+  }
+  res.json(result);
 });
 
 // ── GLPI Enriquecimiento ─────────────────────────────────────────────────────
@@ -146,7 +208,7 @@ app.post("/api/tickets/load", async (_req, res) => {
   }
 });
 
-// Carga real de tickets en background
+// Carga real de tickets en background — tras obtenerlos, lanza el pipeline de cada uno
 app.post("/api/tickets/refresh", (_req, res) => {
   res.json({ ok: true });
   queue.run("load-tickets", "Cargando bandeja GLPI", async (progress) => {
@@ -154,12 +216,41 @@ app.post("/api/tickets/refresh", (_req, res) => {
       progress("glpi", "Conectando con GLPI...");
       const result = await glpi.listTicketsToProcess();
       queue.broadcast({ type: "tickets:ready", data: result });
+      // Lanzar pipeline en background para cada ticket
+      scheduleTicketPipelines(result.tickets || []);
       return result;
     } finally {
       setImmediate(() => glpi.closeContext().catch(() => {}));
     }
   });
 });
+
+/**
+ * Lanza el pipeline de cada ticket de forma secuencial para no saturar el servidor.
+ * Los tickets ya cacheados se saltan.
+ */
+function scheduleTicketPipelines(tickets) {
+  const pending = tickets.filter(t => {
+    const c = cacheGet(t.id);
+    return !c || (c.status !== "done" && c.status !== "running");
+  });
+  if (!pending.length) return;
+
+  let chain = Promise.resolve();
+  for (const t of pending) {
+    const id = t.id;
+    chain = chain.then(() => {
+      // Marcar como running antes de lanzar
+      ticketCache.set(String(id), { status: "running" });
+      queue.broadcast({ type: "ticket:cached", ticketId: id, status: "running" });
+      return queue.run(
+        `ticket-${id}`,
+        `Procesando ticket #${id}`,
+        (progress) => runTicketPipeline(id, progress)
+      );
+    }).catch(() => {}); // no bloquear la cadena si uno falla
+  }
+}
 
 // ── Schema Explorer (background) ─────────────────────────────────────────────
 app.get("/api/schema/status", (_req, res) => {
@@ -351,12 +442,14 @@ const PORT = Number(process.env.PORT || 8788);
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`Soporte LIVE → http://127.0.0.1:${PORT}`);
 
-  // Cargar bandeja automáticamente al arrancar
+  // Cargar bandeja al arrancar y lanzar pipeline de todos los tickets
   queue.run("load-tickets-startup", "Cargando bandeja GLPI al iniciar", async (progress) => {
     try {
       progress("glpi", "Conectando con GLPI...");
       const result = await glpi.listTicketsToProcess();
       queue.broadcast({ type: "tickets:ready", data: result });
+      // Procesar todos los tickets en background automáticamente
+      scheduleTicketPipelines(result.tickets || []);
       return result;
     } finally {
       setImmediate(() => glpi.closeContext().catch(() => {}));

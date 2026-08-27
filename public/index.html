@@ -255,27 +255,42 @@ const state = {
   ticket:   null,
   diag:     null,
   jtras:    null,
-  drafts:   null
+  drafts:   null,
+  proposal: null
 };
 
-// ── Conexión SSE y polling de estado GLPI ──────────────────────────────────
+// Caché local de tickets ya procesados (refleja lo que tiene el servidor)
+const localCache = {};   // ticketId → { ticket, diag, jtras, drafts, proposal, status }
+const cacheStatus = {}; // ticketId → "running"|"done"|"error"
+
+// ── Conexión SSE ──────────────────────────────────────────────────────────
 const evtSource = new EventSource("/api/events");
 evtSource.onmessage = (e) => {
   try { handleEvent(JSON.parse(e.data)); } catch(_) {}
 };
-evtSource.onerror = () => {
-  setDot("glpi", "err");
-};
+evtSource.onerror = () => { setDot("glpi", "err"); };
 
-// Polling ligero del estado GLPI — solo actualiza los dots del topbar
+// Al reconectar SSE, consultar estado de caché del servidor
+evtSource.addEventListener("open", async () => {
+  try {
+    const r = await fetch("/api/tickets/cache-status");
+    const s = await r.json();
+    Object.assign(cacheStatus, s);
+    // Actualizar indicadores en bandeja
+    for (const [id, st] of Object.entries(s)) {
+      updateTicketBadge(id, st);
+    }
+  } catch(_) {}
+});
+
+// Polling ligero del estado GLPI
 async function pollGlpiStatus() {
   try {
     const r = await fetch("/api/glpi/status");
     const s = await r.json();
     if (s.isReady) setDot("glpi", "ok");
-    // Firefox headless: sin diálogos, sin banners de autenticación
   } catch(_) {}
-  setTimeout(pollGlpiStatus, 5000);
+  setTimeout(pollGlpiStatus, 8000);
 }
 pollGlpiStatus();
 
@@ -289,6 +304,22 @@ function setProgress(text, active = true) {
 }
 
 function handleEvent(ev) {
+  // Cachear datos en local para no perderlos al cambiar de ticket
+  if (ev.ticketId) {
+    if (!localCache[ev.ticketId]) localCache[ev.ticketId] = { status: "running" };
+    const c = localCache[ev.ticketId];
+    if (ev.type === "ticket:ready")    { c.ticket   = ev.data; }
+    if (ev.type === "diag:ready")      { c.diag     = ev.data; }
+    if (ev.type === "jtraspaso:ready") { c.jtras    = ev.data; c.codsol = ev.codsol; }
+    if (ev.type === "draft:ready")     { c.drafts   = ev.data; }
+    if (ev.type === "enrich:proposal") { c.proposal = ev.data; }
+    if (ev.type === "ticket:cached")   {
+      c.status = ev.status;
+      cacheStatus[ev.ticketId] = ev.status;
+      updateTicketBadge(ev.ticketId, ev.status);
+    }
+  }
+
   switch (ev.type) {
     case "job:start":
       setProgress(ev.label);
@@ -306,6 +337,14 @@ function handleEvent(ev) {
     case "tickets:ready":
       renderBandeja(ev.data.tickets || []);
       setDot("glpi", "ok");
+      break;
+
+    case "ticket:cached":
+      // Badge ya actualizado arriba — no hacer nada más a menos que sea el ticket activo
+      if (ev.ticketId === state.ticketId && ev.status === "done") {
+        setProgress("", false);
+        ["glpi","extract","jtras","draft","enrich"].forEach(s => setStep(s, "done"));
+      }
       break;
 
     case "ticket:ready":
@@ -328,11 +367,11 @@ function handleEvent(ev) {
       if (ev.ticketId !== state.ticketId) break;
       state.diag = ev.data;
       setStep("extract", "done");
-      const cat = ev.data?.kbMatches?.[0]?.category?.label || "sin clasificar";
-      const cs  = ev.data?.entities?.codsol;
-      setProgress(cs
-        ? `✓ Clasificado: ${cat}. Consultando jTraspaso (CODSOL: ${cs})…`
-        : `✓ Clasificado: ${cat}. Sin CODSOL — generando borradores…`);
+      { const cat = ev.data?.kbMatches?.[0]?.category?.label || "sin clasificar";
+        const cs  = ev.data?.entities?.codsol;
+        setProgress(cs
+          ? `✓ Clasificado: ${cat}. Consultando jTraspaso (CODSOL: ${cs})…`
+          : `✓ Clasificado: ${cat}. Sin CODSOL — buscando por token…`); }
       renderDiag(ev.data);
       break;
 
@@ -372,7 +411,7 @@ function handleEvent(ev) {
     case "enrich:proposal":
       if (ev.ticketId !== state.ticketId) break;
       state.proposal = ev.data;
-      setStep("enrich", ev.data.hasChanges ? "done" : "done");
+      setStep("enrich", "done");
       setProgress("", false);
       renderEnrichProposal(ev.data);
       break;
@@ -461,22 +500,39 @@ function renderBandeja(tickets) {
     list.innerHTML = '<div class="empty">Sin tickets pendientes</div>';
     return;
   }
-  list.innerHTML = tickets.map(t => `
-    <div class="ticket-item" data-id="${esc(t.id)}">
-      <div class="tid">#${esc(t.id)}</div>
+  list.innerHTML = tickets.map(t => {
+    const st = cacheStatus[t.id] || "pending";
+    return `<div class="ticket-item" data-id="${esc(t.id)}">
+      <div style="display:flex;align-items:center;gap:6px">
+        <div class="tid">#${esc(t.id)}</div>
+        <span class="ticket-cache-badge" id="badge-${esc(t.id)}" data-status="${st}"
+          title="${st}">${badgeIcon(st)}</span>
+      </div>
       <div class="ttitle" title="${esc(t.title)}">${esc(t.title||"(sin título)")}</div>
       ${t.elementos ? `<div style="font-size:.68rem;color:var(--acc2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(t.elementos)}</div>` : ""}
-      <div class="tstate" style="background:var(--warn)"></div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   list.querySelectorAll(".ticket-item").forEach(el => {
     el.onclick = () => openTicket(el.dataset.id);
   });
 }
 
+function badgeIcon(status) {
+  if (status === "done")    return `<span style="color:var(--ok);font-size:.7rem" title="Listo">✓</span>`;
+  if (status === "running") return `<span class="spin" style="width:9px;height:9px;border-width:1.5px" title="Procesando…"></span>`;
+  if (status === "error")   return `<span style="color:var(--err);font-size:.7rem" title="Error">✕</span>`;
+  return `<span style="color:var(--bg4);font-size:.7rem" title="Pendiente">◌</span>`;
+}
+
+function updateTicketBadge(ticketId, status) {
+  cacheStatus[ticketId] = status;
+  const el = document.getElementById("badge-" + ticketId);
+  if (el) { el.dataset.status = status; el.innerHTML = badgeIcon(status); }
+}
+
 // ── Abrir ticket ──────────────────────────────────────────────────────────
 async function openTicket(id) {
   state.ticketId = String(id);
-  state.ticket = state.diag = state.jtras = state.drafts = state.proposal = null;
 
   // Marcar activo en bandeja
   document.querySelectorAll(".ticket-item").forEach(el =>
@@ -487,19 +543,41 @@ async function openTicket(id) {
   const tv = document.getElementById("ticket-view");
   tv.classList.add("active");
 
-  // Reset UI
+  // Reset cabecera
   document.getElementById("tv-title").textContent = `Ticket #${id}`;
   document.getElementById("tv-id").textContent     = `#${id}`;
   ["tv-proc-wrap","tv-codsol-wrap","tv-dni-wrap"].forEach(i =>
     document.getElementById(i).style.display = "none");
 
-  // Steps: todos en running
+  // ── Si tenemos caché local completa, renderizar inmediatamente ─────────
+  const cached = localCache[String(id)];
+  if (cached && cached.status === "done") {
+    state.ticket   = cached.ticket;
+    state.diag     = cached.diag;
+    state.jtras    = cached.jtras;
+    state.drafts   = cached.drafts;
+    state.proposal = cached.proposal;
+
+    document.getElementById("tv-content").innerHTML = "";
+    ["glpi","extract","jtras","draft","enrich"].forEach(s => setStep(s, "done"));
+    setProgress("", false);
+    setDot("glpi",  "ok");
+    setDot("jtras", cached.jtras ? "ok" : "ok");
+
+    if (cached.ticket)   { renderTicketHeader(cached.ticket); renderTimeline(cached.ticket); }
+    if (cached.diag)     renderDiag(cached.diag);
+    if (cached.jtras)    renderJtraspaso(cached.jtras, cached.codsol || cached.jtras?.codsol);
+    if (cached.drafts)   renderDrafts(cached.drafts);
+    if (cached.proposal) renderEnrichProposal(cached.proposal);
+    return;
+  }
+
+  // ── Si está procesando: mostrar esqueleto + esperar SSE ───────────────
   ["glpi","extract","jtras","draft","enrich"].forEach(s => {
     const el = document.getElementById("step-" + s);
     if (el) { el.className = "step running"; el.querySelector("span.spin")?.remove(); }
   });
 
-  // Esqueletos de carga
   document.getElementById("tv-content").innerHTML = `
     <div class="skel" style="height:70px;border-radius:var(--r)"></div>
     <div class="skel" style="height:130px;border-radius:var(--r)"></div>
@@ -508,8 +586,18 @@ async function openTicket(id) {
 
   setDot("glpi",  "running");
   setDot("jtras", "running");
-  setProgress(`Leyendo ticket #${id} de GLPI…`);
+  setProgress(`Cargando ticket #${id}…`);
 
+  // Si hay datos parciales en caché, mostrar lo que haya ya
+  if (cached) {
+    if (cached.ticket)   { renderTicketHeader(cached.ticket); renderTimeline(cached.ticket); setStep("glpi", "done"); }
+    if (cached.diag)     { renderDiag(cached.diag); setStep("extract", "done"); }
+    if (cached.jtras)    { renderJtraspaso(cached.jtras, cached.codsol); setStep("jtras", "done"); }
+    if (cached.drafts)   { renderDrafts(cached.drafts); setStep("draft", "done"); }
+    if (cached.proposal) { renderEnrichProposal(cached.proposal); setStep("enrich", "done"); }
+  }
+
+  // Lanzar pipeline (si ya está corriendo en servidor, simplemente reenvía SSE)
   try {
     await api("/api/ticket/process", { ticketId: String(id) });
   } catch(e) {
