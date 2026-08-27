@@ -53,7 +53,12 @@ function cacheError(ticketId, err) {
 }
 
 // ── Pipeline completo de un ticket (reutilizable) ─────────────────────────────
-async function runTicketPipeline(ticketId, progress) {
+/**
+ * @param {string|number} ticketId
+ * @param {Function}      progress   callback (step, detail)
+ * @param {boolean}       keepOpen   si true, NO cierra Firefox al terminar (para pipelines en cadena)
+ */
+async function runTicketPipeline(ticketId, progress, keepOpen = false) {
   ticketCache.set(String(ticketId), { status: "running" });
   try {
     // PASO 1: Leer ticket de GLPI
@@ -125,10 +130,12 @@ async function runTicketPipeline(ticketId, progress) {
     queue.broadcast({ type: "ticket:cached", ticketId, status: "error", error: e.message });
     throw e;
   } finally {
-    setImmediate(async () => {
-      await glpi.closeContext().catch(() => {});
-      await jtras.closeContext().catch(() => {});
-    });
+    if (!keepOpen) {
+      setImmediate(async () => {
+        await glpi.closeContext().catch(() => {});
+        await jtras.closeContext().catch(() => {});
+      });
+    }
   }
 }
 
@@ -212,22 +219,18 @@ app.post("/api/tickets/load", async (_req, res) => {
 app.post("/api/tickets/refresh", (_req, res) => {
   res.json({ ok: true });
   queue.run("load-tickets", "Cargando bandeja GLPI", async (progress) => {
-    try {
-      progress("glpi", "Conectando con GLPI...");
-      const result = await glpi.listTicketsToProcess();
-      queue.broadcast({ type: "tickets:ready", data: result });
-      // Lanzar pipeline en background para cada ticket
-      scheduleTicketPipelines(result.tickets || []);
-      return result;
-    } finally {
-      setImmediate(() => glpi.closeContext().catch(() => {}));
-    }
+    progress("glpi", "Conectando con GLPI...");
+    const result = await glpi.listTicketsToProcess();
+    queue.broadcast({ type: "tickets:ready", data: result });
+    // NO cerrar Firefox — el pipeline de tickets lo reutiliza
+    scheduleTicketPipelines(result.tickets || []);
+    return result;
   });
 });
 
 /**
- * Lanza el pipeline de cada ticket de forma secuencial para no saturar el servidor.
- * Los tickets ya cacheados se saltan.
+ * Lanza el pipeline de cada ticket de forma secuencial.
+ * Firefox se mantiene abierto entre tickets (keepOpen=true) y solo se cierra al final.
  */
 function scheduleTicketPipelines(tickets) {
   const pending = tickets.filter(t => {
@@ -237,19 +240,33 @@ function scheduleTicketPipelines(tickets) {
   if (!pending.length) return;
 
   let chain = Promise.resolve();
-  for (const t of pending) {
+  for (let i = 0; i < pending.length; i++) {
+    const t = pending[i];
     const id = t.id;
+    const isLast = i === pending.length - 1;
     chain = chain.then(() => {
-      // Marcar como running antes de lanzar
       ticketCache.set(String(id), { status: "running" });
       queue.broadcast({ type: "ticket:cached", ticketId: id, status: "running" });
       return queue.run(
         `ticket-${id}`,
         `Procesando ticket #${id}`,
-        (progress) => runTicketPipeline(id, progress)
+        // keepOpen=true en todos menos el último — Firefox no se cierra entre tickets
+        (progress) => runTicketPipeline(id, progress, !isLast)
       );
-    }).catch(() => {}); // no bloquear la cadena si uno falla
+    }).catch(() => {
+      // Si un ticket falla, cerrar Firefox y continuar con el siguiente
+      glpi.closeContext().catch(() => {});
+      jtras.closeContext().catch(() => {});
+    });
   }
+
+  // Garantía extra: cerrar Firefox cuando toda la cadena acabe
+  chain.finally(() => {
+    setTimeout(() => {
+      glpi.closeContext().catch(() => {});
+      jtras.closeContext().catch(() => {});
+    }, 2000);
+  });
 }
 
 // ── Schema Explorer (background) ─────────────────────────────────────────────
@@ -444,15 +461,12 @@ app.listen(PORT, "127.0.0.1", () => {
 
   // Cargar bandeja al arrancar y lanzar pipeline de todos los tickets
   queue.run("load-tickets-startup", "Cargando bandeja GLPI al iniciar", async (progress) => {
-    try {
-      progress("glpi", "Conectando con GLPI...");
-      const result = await glpi.listTicketsToProcess();
-      queue.broadcast({ type: "tickets:ready", data: result });
-      // Procesar todos los tickets en background automáticamente
-      scheduleTicketPipelines(result.tickets || []);
-      return result;
-    } finally {
-      setImmediate(() => glpi.closeContext().catch(() => {}));
-    }
+    progress("glpi", "Conectando con GLPI...");
+    const result = await glpi.listTicketsToProcess();
+    queue.broadcast({ type: "tickets:ready", data: result });
+    // Nota: NO cerramos Firefox aquí — scheduleTicketPipelines lo reutiliza
+    // El cierre ocurre al final de la cadena de tickets en scheduleTicketPipelines
+    scheduleTicketPipelines(result.tickets || []);
+    return result;
   });
 });
