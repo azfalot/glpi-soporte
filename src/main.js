@@ -22,6 +22,24 @@ app.use(express.static(path.join(__dirname, "..", "public")));
 // ── SSE — canal de eventos para la UI ───────────────────────────────────────
 app.get("/api/events", (req, res) => {
   queue.addClient(res);
+
+  // Si no hay tickets en caché y el startup ya terminó (o nunca arrancó),
+  // lanzar un refresh automático para que el nuevo cliente vea la bandeja
+  setImmediate(() => {
+    if (queue._lastTickets) return;  // ya hay datos, el replay los enviará
+    const startup = queue.status("load-tickets-startup");
+    const running = startup && startup.status === "running";
+    if (!running) {
+      // Startup ya terminó o nunca existió — relanzar silenciosamente
+      queue.run("load-tickets-startup", "Cargando bandeja GLPI al iniciar", async (progress) => {
+        progress("glpi", "Conectando con GLPI...");
+        const result = await glpi.listTicketsToProcess();
+        queue.broadcast({ type: "tickets:ready", data: result });
+        scheduleTicketPipelines(result.tickets || []);
+        return result;
+      });
+    }
+  });
 });
 
 app.get("/api/jobs", (_req, res) => {
