@@ -318,6 +318,15 @@ function buildDiagSQL(codsol, iddatos) {
     "SET COLSEP ' | '",
     "SET SERVEROUTPUT ON SIZE UNLIMITED",
     "",
+    "-- Si no se dispone de CODSOLICITUD, localizarlo primero por un dato conocido",
+    "-- (DNI/NIE, matricula, etc.) dentro del CLOB DATOS, acotando por fecha:",
+    "-- SELECT IDDATOS, IDESTADO, FECALTA, CODSOLICITUD,",
+    "--        DBMS_LOB.GETLENGTH(DATOS) AS LONGITUD_DATOS",
+    "-- FROM PPFDATOS",
+    "-- WHERE FECALTA >= TO_DATE('01/08/2026','DD/MM/YYYY')",
+    "--   AND FECALTA <  TO_DATE('01/09/2026','DD/MM/YYYY')",
+    "--   AND DATOS LIKE '%9266444%';",
+    "",
     "DEFINE CODSOL = '" + codsol + "'",
     "DEFINE IDDATOS = " + iddat,
     "",
@@ -327,32 +336,59 @@ function buildDiagSQL(codsol, iddatos) {
     "WHERE UPPER(CODSOLICITUD) = UPPER('&CODSOL');",
     "",
     "PROMPT ==== 3) REVISION PAGO ====",
-    "SELECT IDPAGO, IDDESCOESTADO, CODESTADO, NIF, IMPORTE, URLVUELTA",
+    "SELECT IDPAGO, IDDESCOESTADO, CODESTADO, NIF, IMPORTE, N28,",
+    "       FECPAGO, FECESTADO, IDPETITPV, CCO, IDGUID, URLVUELTA",
     "FROM PASAPAGO.PAGO",
-    "WHERE URLVUELTA LIKE '%' || '&CODSOL' || '%';",
+    "WHERE URLVUELTA LIKE '%' || '&CODSOL' || '%'",
+    "ORDER BY FECESTADO DESC;",
     "",
     "PROMPT ==== 4) REVISION EVENTOS ====",
-    "SELECT IDEVENTO, FECEVENTO, SUBSTR(TO_CHAR(RESPUESTA),1,300) AS RESPUESTA_PREVIEW",
+    "-- DBMS_LOB.SUBSTR opera directamente sobre el LOB (no materializa el CLOB",
+    "-- completo como CHAR primero), evita ORA-22835 con respuestas largas (>4000 bytes)",
+    "SELECT IDEVENTO, EVENTO, FECEVENTO, CODPROCEDIMIENTO,",
+    "       DBMS_LOB.SUBSTR(RESPUESTA, 300, 1) AS RESPUESTA_PREVIEW",
     "FROM PPFEVENTO",
     "WHERE UPPER(CODSOLICITUD) = UPPER('&CODSOL')",
     "ORDER BY FECEVENTO;",
     "",
-    "PROMPT ==== 4b) RESPUESTA ULTIMO EVENTO ====",
-    "SELECT TO_CHAR(RESPUESTA)",
-    "FROM OVCONTRI.PPFEVENTO",
-    "WHERE IDEVENTO = (",
-    "  SELECT MAX(IDEVENTO)",
-    "  FROM OVCONTRI.PPFEVENTO",
-    "  WHERE UPPER(CODSOLICITUD) = UPPER('&CODSOL')",
-    ");"
+    "PROMPT ==== 4b) RESPUESTA ULTIMO EVENTO (chunks CLOB, reconstruir con ~) ====",
+    "SET FEEDBACK OFF",
+    "DECLARE",
+    "    l_offset  NUMBER := 1;",
+    "    l_chunk   CONSTANT PLS_INTEGER := 3000;",
+    "    l_total   NUMBER;",
+    "    l_clob    CLOB;",
+    "    l_idev    NUMBER;",
+    "BEGIN",
+    "    SELECT MAX(IDEVENTO) INTO l_idev",
+    "      FROM PPFEVENTO",
+    "     WHERE UPPER(CODSOLICITUD) = UPPER('&CODSOL');",
+    "    SELECT RESPUESTA INTO l_clob FROM PPFEVENTO WHERE IDEVENTO = l_idev;",
+    "    l_total := DBMS_LOB.GETLENGTH(l_clob);",
+    "    DBMS_OUTPUT.PUT_LINE('[[EVT_LEN=' || l_total || ' IDEVENTO=' || l_idev || ']]');",
+    "    WHILE l_offset <= l_total LOOP",
+    "        DBMS_OUTPUT.PUT_LINE(DBMS_LOB.SUBSTR(l_clob, l_chunk, l_offset) || '~');",
+    "        l_offset := l_offset + l_chunk;",
+    "    END LOOP;",
+    "EXCEPTION",
+    "    WHEN NO_DATA_FOUND THEN",
+    "        DBMS_OUTPUT.PUT_LINE('ERROR ::: No hay eventos para CODSOL &CODSOL');",
+    "    WHEN OTHERS THEN",
+    "        DBMS_OUTPUT.PUT_LINE('ERROR ::: ' || SQLERRM);",
+    "END;",
+    "/",
+    "SET FEEDBACK ON"
   ].join("\n");
 }
 
 /**
  * SQL extraccion CLOB DATOS completo (FASE 2).
- * Requiere IDDATOS conocido. Emite chunks terminados en ~ para reconstruccion.
+ * NO requiere IDDATOS manual: se resuelve con una subquery MAX(IDDATOS) sobre
+ * CODSOLICITUD, igual que la respuesta del ultimo evento en buildDiagSQL().
+ * Si un CODSOL tiene varias filas en PPFDATOS (raro pero posible), toma la mas
+ * reciente (IDDATOS mayor). Emite chunks terminados en ~ para reconstruccion.
  */
-function buildClobSQL(codsol, iddatos) {
+function buildClobSQL(codsol) {
   return [
     "SET PAGESIZE 50000",
     "SET LINESIZE 32767",
@@ -367,30 +403,33 @@ function buildClobSQL(codsol, iddatos) {
     "SET SERVEROUTPUT ON SIZE UNLIMITED",
     "",
     "DEFINE CODSOL = '" + codsol + "'",
-    "DEFINE IDDATOS = " + iddatos,
     "",
-    "PROMPT ==== 5) EXTRACCION CLOB DATOS ====",
+    "PROMPT ==== 5) EXTRACCION CLOB DATOS (IDDATOS resuelto automaticamente) ====",
     "DECLARE",
     "    l_offset   NUMBER := 1;",
     "    l_chunk    NUMBER := 2000;",
     "    l_total    NUMBER;",
     "    l_clob     CLOB;",
+    "    l_iddatos  NUMBER;",
     "    c_fin      CONSTANT VARCHAR2(1) := '~';",
     "BEGIN",
+    "    SELECT MAX(iddatos) INTO l_iddatos",
+    "      FROM ovcontri.ppfdatos",
+    "     WHERE UPPER(codsolicitud) = UPPER('&CODSOL');",
+    "",
     "    SELECT datos",
     "      INTO l_clob",
     "      FROM ovcontri.ppfdatos",
-    "     WHERE UPPER(codsolicitud) = UPPER('&CODSOL')",
-    "       AND iddatos = TO_NUMBER('&IDDATOS');",
+    "     WHERE iddatos = l_iddatos;",
     "    l_total := DBMS_LOB.getlength(l_clob);",
-    "    DBMS_OUTPUT.put_line('[[JSON_LEN=' || l_total || ']]');",
+    "    DBMS_OUTPUT.put_line('[[JSON_LEN=' || l_total || ' IDDATOS=' || l_iddatos || ']]');",
     "    WHILE l_offset <= l_total LOOP",
     "        DBMS_OUTPUT.put_line(DBMS_LOB.substr(l_clob, l_chunk, l_offset) || c_fin);",
     "        l_offset := l_offset + l_chunk;",
     "    END LOOP;",
     "EXCEPTION",
     "    WHEN NO_DATA_FOUND THEN",
-    "        DBMS_OUTPUT.put_line('ERROR ::: No existe registro para CODSOL/IDDATOS');",
+    "        DBMS_OUTPUT.put_line('ERROR ::: No existe registro PPFDATOS para CODSOL &CODSOL');",
     "    WHEN OTHERS THEN",
     "        DBMS_OUTPUT.put_line('ERROR ::: ' || SQLERRM);",
     "END;",
@@ -405,7 +444,7 @@ function buildClobSQL(codsol, iddatos) {
  * Construye SQL para buscar CODSOLICITUD por DNI u otro token + fecha.
  * La fecha debe venir en formato MM/YY (ej: "08/26" para agosto 2026).
  */
-function buildTokenSearchSQL(token, fechaMM_YY) {
+function buildTokenSearchSQL(token, fechaRange) {
   const lines = [
     "SET PAGESIZE 50000",
     "SET LINESIZE 32767",
@@ -414,19 +453,45 @@ function buildTokenSearchSQL(token, fechaMM_YY) {
     "SET FEEDBACK ON",
     "SET HEADING ON",
     "",
-    "-- Búsqueda por token (DNI / matrícula) y fecha aproximada",
-    "SELECT IDDATOS, CODSOLICITUD, IDESTADO, FECALTA",
+    "-- Búsqueda por token (DNI / matrícula) y rango de fechas",
+    "SELECT IDDATOS, IDESTADO, FECALTA, CODSOLICITUD,",
+    "       DBMS_LOB.GETLENGTH(DATOS) AS LONGITUD_DATOS",
     "FROM PPFDATOS",
-    "WHERE DATOS LIKE '%" + token.replace(/'/g, "''") + "%'"
+    "WHERE FECALTA >= TO_DATE('" + fechaRange.desde + "', 'DD/MM/YYYY')",
+    "  AND FECALTA < TO_DATE('" + fechaRange.hasta + "', 'DD/MM/YYYY')",
+    "  AND DATOS LIKE '%" + token.replace(/'/g, "''") + "%'"
   ];
-  if (fechaMM_YY) {
-    lines.push("  AND FECALTA LIKE '%" + fechaMM_YY.replace(/'/g, "''") + "%'");
-  }
   lines.push("ORDER BY FECALTA DESC;");
   return lines.join("\n");
 }
 
+function buildDescribeSQL() {
+  return [
+    "DESCRIBE PPFDATOS",
+    "DESCRIBE PASAPAGO.PAGO",
+    "DESCRIBE PPFEVENTO"
+  ].join("\n");
+}
+
 // ── Diagnostico de alto nivel ─────────────────────────────────────────────
+
+/**
+ * Reconstruye un CLOB emitido como chunks terminados en '~' tras un marcador
+ * '[[MARKER=longitud]]'. Reutilizable para DATOS (JSON_LEN) y RESPUESTA (EVT_LEN).
+ */
+function extractLobChunks(rawOutput, marker) {
+  if (!rawOutput) return null;
+  const markerRe = new RegExp("\\[\\[" + marker + "=(\\d+)");
+  const markerMatch = rawOutput.match(markerRe);
+  if (!markerMatch) return null;
+  const afterMarker = rawOutput.slice(rawOutput.indexOf(markerMatch[0]) + markerMatch[0].length);
+  const clobStr = afterMarker
+    .split("~")
+    .map(s => s.trim())
+    .filter(s => s && !s.startsWith("[[") && !s.startsWith("SET ") && !s.startsWith("DECLARE") && !s.startsWith("PROMPT"))
+    .join("");
+  return clobStr || null;
+}
 
 /**
  * diagnoseFull — acepta codsol directo O entidades del ticket para fallback.
@@ -443,6 +508,8 @@ async function diagnoseFull(codsol, progress, entities) {
     eventos:    [],
     clobRaw:    null,
     clobParsed: null,
+    ultimoEventoRespuesta: null,
+    ultimoEventoRespuestaParsed: null,
     errors:     [],
     rawOutput:  "",
     tokenSearch: null   // resultado de búsqueda por token si no había CODSOL
@@ -454,18 +521,38 @@ async function diagnoseFull(codsol, progress, entities) {
                || (entities.nies && entities.nies[0])
                || (entities.matriculas && entities.matriculas[0]);
     if (token) {
-      // Convertir fecha ISO (2026-08-15) → "08/26" para el LIKE
-      let fechaMM_YY = null;
+      const normalizedToken = /^[XYZ]\d{7}[A-Z]$/i.test(token) ? token.slice(1, -1) : token.replace(/[A-Z]$/i, "");
+      let fechaRange = null;
       if (entities.fecha) {
         const parts = entities.fecha.split("-"); // [2026, 08, 15]
         if (parts.length === 3) {
-          const yy = parts[0].slice(2); // "26"
-          fechaMM_YY = parts[1] + "/" + yy; // "08/26"
+          const year = Number(parts[0]);
+          const month = Number(parts[1]);
+          const next = new Date(Date.UTC(year, month, 1));
+          fechaRange = {
+            desde: `01/${String(month).padStart(2, "0")}/${year}`,
+            hasta: `01/${String(next.getUTCMonth() + 1).padStart(2, "0")}/${next.getUTCFullYear()}`
+          };
         }
       }
-      progress("token-search", `Buscando CODSOL por token: ${token}${fechaMM_YY ? " fecha: " + fechaMM_YY : ""}...`);
+      if (!fechaRange) {
+        const now = new Date();
+        const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+        fechaRange = {
+          desde: `01/${String(now.getUTCMonth() + 1).padStart(2, "0")}/${now.getUTCFullYear()}`,
+          hasta: `01/${String(next.getUTCMonth() + 1).padStart(2, "0")}/${next.getUTCFullYear()}`
+        };
+      }
+      progress("schema", "Verificando estructura de tablas en jTraspaso...");
       try {
-        const r0 = await runQuery(buildTokenSearchSQL(token, fechaMM_YY));
+        const schemaResult = await runQuery(buildDescribeSQL());
+        out.schema = schemaResult.rows || [];
+      } catch (e) {
+        out.errors.push("DESCRIBE: " + e.message);
+      }
+      progress("token-search", `Buscando CODSOL por token: ${normalizedToken} (${fechaRange.desde} - ${fechaRange.hasta})...`);
+      try {
+        const r0 = await runQuery(buildTokenSearchSQL(normalizedToken, fechaRange));
         out.rawOutput = r0.rawOutput;
         out.tokenSearch = r0.rows || [];
         // Tomar el primer CODSOLICITUD encontrado
@@ -523,24 +610,40 @@ async function diagnoseFull(codsol, progress, entities) {
       const m = r1.rawOutput.match(/\b(\d{7,9})\b/);
       if (m) iddatos = m[1];
     }
+
+    // Respuesta del ultimo evento (bloque 4b, chunks CLOB tras [[EVT_LEN=...]])
+    const evtRespuestaRaw = extractLobChunks(r1.rawOutput, "EVT_LEN");
+    if (evtRespuestaRaw) {
+      out.ultimoEventoRespuesta = evtRespuestaRaw;
+      try {
+        const start = evtRespuestaRaw.indexOf("{");
+        const end = evtRespuestaRaw.lastIndexOf("}");
+        if (start >= 0 && end > start) {
+          out.ultimoEventoRespuestaParsed = JSON.parse(evtRespuestaRaw.substring(start, end + 1));
+        }
+      } catch (_) {
+        out.ultimoEventoRespuestaParsed = null;
+      }
+    }
   } catch (e) {
     out.errors.push("Fase 1: " + e.message);
   }
 
-  // FASE 2: extraccion CLOB
-  if (iddatos && iddatos !== "0") {
-    progress("clob", "Extrayendo CLOB DATOS (IDDATOS=" + iddatos + ")...");
+  // FASE 2: extraccion CLOB DATOS — solo requiere CODSOL, IDDATOS se resuelve
+  // dentro del propio PL/SQL (MAX(IDDATOS) por CODSOLICITUD), ver buildClobSQL()
+  if (codsol) {
+    progress("clob", "Extrayendo CLOB DATOS (CODSOL=" + codsol + ")...");
     try {
-      const r2 = await runQuery(buildClobSQL(codsol, iddatos));
+      const r2 = await runQuery(buildClobSQL(codsol));
       out.rawOutput += "\n\n--- CLOB ---\n" + r2.rawOutput;
 
-      // Reconstruir CLOB desde chunks terminados en ~
-      const clobStr = r2.rawOutput
-        .split("~")
-        .map(s => s.trim())
-        .filter(s => s && !s.startsWith("[[") && !s.startsWith("SET ") && !s.startsWith("DECLARE"))
-        .join("");
+      // Reconstruir CLOB desde chunks terminados en ~ tras [[JSON_LEN=...]]
+      const clobStr = extractLobChunks(r2.rawOutput, "JSON_LEN");
       out.clobRaw = clobStr;
+
+      // Capturar el IDDATOS real resuelto por el PL/SQL (para mostrarlo/auditar)
+      const idMatch = r2.rawOutput.match(/\[\[JSON_LEN=\d+\s+IDDATOS=(\d+)\]\]/);
+      if (idMatch) iddatos = idMatch[1];
 
       if (clobStr) {
         try {
@@ -558,6 +661,8 @@ async function diagnoseFull(codsol, progress, entities) {
     }
   }
 
+  if (iddatos) out.iddatos = iddatos;
+
   return out;
 }
 
@@ -571,10 +676,8 @@ module.exports = {
   buildDiagSQL,
   buildClobSQL,
   buildTokenSearchSQL,
+  buildDescribeSQL,
   parseResult
 };
-
-
-
 
 

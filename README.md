@@ -16,7 +16,7 @@ npm install
 # Ejecutar suite de pruebas unitarias
 npm test
 
-# Arrancar servidor en modo MOCK (por defecto)
+# Arrancar servidor en modo MOCK (pruebas offline)
 npm start
 ```
 Abre en tu navegador: `http://127.0.0.1:8788`
@@ -29,7 +29,7 @@ Requiere acceso a la red corporativa (VPN) y certificado digital FNMT instalado 
 ```bash
 # 1. Configurar entorno
 copy .env.example .env
-# En .env: configurar DATA_MODE=live (y HEADLESS=true si no requieres interfaz de navegador)
+# En .env: DATA_MODE=live (modo predeterminado; requiere acceso institucional)
 
 # 2. Instalar navegador Firefox en Playwright (solo la primera vez)
 npx playwright install firefox
@@ -60,7 +60,7 @@ Bandeja de Tickets
 | Variable | Descripción | Valores / Default |
 |---|---|---|
 | `PORT` | Puerto del servidor Express | `8788` |
-| `DATA_MODE` | Modo de datos: `mock` (fixtures offline) o `live` (Playwright) | `mock` |
+| `DATA_MODE` | Modo de datos: `mock` (fixtures offline) o `live` (Playwright) | `live` |
 | `HEADLESS` | Ejecutar Firefox en background sin ventana gráfica | `false` |
 
 ---

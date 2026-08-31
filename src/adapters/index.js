@@ -3,16 +3,17 @@
 const GlpiAdapter = require("./glpiAdapter");
 const JtraspasoAdapter = require("./jtraspasoAdapter");
 
-const DATA_MODE = process.env.DATA_MODE || "mock"; // Default a mock para permitir dev sin VPN
+let dataMode = process.env.DATA_MODE || "live";
 
-const glpi = new GlpiAdapter(DATA_MODE);
-const jtras = new JtraspasoAdapter(DATA_MODE);
+const glpi = new GlpiAdapter(dataMode);
+const jtras = new JtraspasoAdapter(dataMode);
 
 function getMode() {
-  return DATA_MODE;
+  return dataMode;
 }
 
 function setMode(mode) {
+  dataMode = mode;
   process.env.DATA_MODE = mode;
   glpi.mode = mode;
   jtras.mode = mode;

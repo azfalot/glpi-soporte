@@ -21,7 +21,11 @@ const RE_CODSOL_BRACES   = /\{([A-Za-z0-9]{10,40})\}/;  // {BtzRD5JqSAlYjCgVg1c4
 // RE_PROC_BRACKET busca [1197] en el título (número de 3-6 dígitos entre [])
 const RE_PROC_EXPLICIT = /(?:procedimiento|proc)\s*[:=#]\s*([A-Z0-9_.\-]{3,50})/i;
 const RE_PROC_BRACKET  = /\[(\d{3,6})\]/;  // [1197]
+const RE_PROC_CARM = /procedimiento\s+carm\s*[:=#]?\s*(\d{3,6})/i;
+const RE_MODELO = /modelo\s*[:#]?\s*(\d{3,6})/i;
 const RE_FECHA  = /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/;
+const RE_FECHA_ES = /(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\s+de\s+(\d{4})/i;
+const MONTHS_ES = { enero:"01", febrero:"02", marzo:"03", abril:"04", mayo:"05", junio:"06", julio:"07", agosto:"08", septiembre:"09", octubre:"10", noviembre:"11", diciembre:"12" };
 
 /** Extrae todos los matches únicos de un regex en un texto */
 function extractAll(text, re) {
@@ -42,6 +46,11 @@ function normalizeDate(match) {
   const [, d, mo, y] = match;
   const year = y.length === 2 ? "20" + y : y;
   return `${year}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}`;
+}
+
+function normalizeSpanishDate(match) {
+  if (!match) return null;
+  return `${match[3]}-${MONTHS_ES[match[2].toLowerCase()]}-${match[1].padStart(2, "0")}`;
 }
 
 /**
@@ -80,19 +89,26 @@ function extractEntities(ticket) {
   // Procedimiento: solo explícito con delimitador estricto, o entre corchetes en el título
   const procExplicit = RE_PROC_EXPLICIT.exec(text);
   const procBracket  = RE_PROC_BRACKET.exec(title);
-  const procedimiento = procExplicit ? procExplicit[1].trim().toUpperCase()
+  const procCarm = RE_PROC_CARM.exec(text);
+  const procedimiento = procCarm ? procCarm[1].trim()
+                      : procExplicit ? procExplicit[1].trim().toUpperCase()
                       : procBracket  ? procBracket[1].trim()
                       : null;
+  const modeloM = RE_MODELO.exec(text);
 
   const fechaM = RE_FECHA.exec(text);
+  const fechaEs = RE_FECHA_ES.exec(text);
 
   return {
     dnis,
     nies,
     matriculas,
     codsol,
+    modelo: modeloM ? modeloM[1] : (procBracket ? procBracket[1] : null),
     procedimiento,
-    fecha: normalizeDate(fechaM ? [, fechaM[1], fechaM[2], fechaM[3]] : null)
+    fecha: fechaM
+      ? normalizeDate([, fechaM[1], fechaM[2], fechaM[3]])
+      : normalizeSpanishDate(fechaEs)
   };
 }
 

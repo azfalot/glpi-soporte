@@ -91,6 +91,8 @@ Le facilitamos la siguiente URL para que pueda continuar con la presentación de
 
 {{URL_PRESENTADOR}}
 
+**Advertencia:** el acceso a esta URL solo está disponible para la persona que realizó el procedimiento.
+
 Una vez completada la presentación podrá obtener el justificante correspondiente.
 
 Gracias.
@@ -172,33 +174,57 @@ Una vez completada la presentación podrá obtener el justificante correspondien
 Gracias.
 
 Un saludo."`,
-      alreadyPresented: `Att CAU UTE-ACCENTURE-OESIA-ATRM
+      alreadyPresented: `**Att CAU UTE-ACCENTURE-OESIA-ATRM**
 
-Buenos días,
+Hay que indicar la siguiente solución a la persona solicitante:
 
-Hemos comprobado que la presentación de su solicitud se ha realizado correctamente.
-
-Le facilitamos nuevamente la siguiente URL para acceder a la documentación generada:
-
-{{URL_DOCS}}
-
-Gracias.
-
-Un saludo.`,
+> {{SALUDO}},
+>
+> Hemos comprobado que su solicitud del modelo {{MODELO}} figura como presentada correctamente, por lo que el trámite ya ha finalizado con éxito.
+>
+> Le facilitamos nuevamente la URL de confirmación y acceso a la documentación:
+>
+> [{{URL_DOCS}}]({{URL_DOCS}})
+>
+> **Advertencia:** solo el presentador puede acceder a la URL.
+>
+> Quedamos a su disposición para cualquier aclaración adicional.
+>
+> Disculpe las molestias ocasionadas.
+>
+> Gracias.
+>
+> Un saludo.`,
     },
-    taskTemplate: `Se revisa la solicitud {{CODSOL}} correspondiente al procedimiento {{PROC}}.
+    taskTemplate: `Se revisa la solicitud {{CODSOL}} correspondiente al modelo {{MODELO}} y procedimiento {{PROC}}.
 
-Se comprueba que el pago asociado consta realizado correctamente por importe de {{IMPORTE}}, con N28 {{N28}}.
+Se comprueba que la autoliquidación asociada al expediente consta correctamente generada y que el pago figura como {{ESTADO_PAGO}} por importe de {{IMPORTE}}, asociado al justificante N28 {{N28}}.
 
-Se verifica la correcta generación del GUID {{GUID}} y de la URL de Presentador.
+Asimismo, se verifica la correcta generación del GUID {{GUID}} y de la URL de Presentador asociada al expediente.
 
-Revisado el estado de tramitación, la solicitud permanece en estado 5, habiéndose completado correctamente el pago pero quedando pendiente la finalización del proceso de presentación electrónica.
+{{SITUACION_SOLICITUD}}
 
-No se observan incidencias en el pago ni en la generación de la solicitud, por lo que se facilita al interesado la URL de recuperación para que pueda reanudar el proceso y completar la presentación del expediente.
+{{ACCION_PROPUESTA}}
 
 URL Presentador: {{URL_PRESENTADOR}}
+URL documentos/confirmación: {{URL_DOCS}}
 
-Se adjuntan capturas de las comprobaciones realizadas.`,
+Se revisan asimismo los eventos de jTraspaso y se conservan como evidencia las respuestas y adjuntos analizados.
+
+{{EVIDENCIA_ERROR}}`,
+    taskTemplatePresented: `Se revisa la solicitud {{CODSOL}} correspondiente al modelo {{MODELO}} y procedimiento {{PROC}}.
+
+Se comprueba que la autoliquidación asociada al expediente consta correctamente generada y que el pago figura como {{ESTADO_PAGO}} por importe de {{IMPORTE}}, asociado al justificante N28 {{N28}}.
+
+Asimismo, se verifica la correcta generación del GUID {{GUID}} y la existencia de la solicitud en jTraspaso.
+
+Aunque el registro conserva IDESTADO {{IDESTADO}}, la URL de Presentador devuelve {{ERROR_PRESENTADOR}}, indicio de que la solicitud ya ha sido presentada y no debe reintentarse desde dicho enlace.
+
+Como actuación, se facilita al interesado la URL de confirmación/documentos y se deja constancia de la respuesta del Presentador y de los eventos de jTraspaso.
+
+URL de confirmación/documentos: {{URL_DOCS}}
+
+{{EVIDENCIA_ERROR}}`,
     tidExamples: ["1559652", "1560114", "1565516", "1530381"]
   },
 
@@ -708,31 +734,32 @@ function buildVars(entities = {}, diagData = {}, ticketId = null) {
     || "NNNNNNN";
 
   // DNI / NIF
+  // Nota: PPFDATOS no tiene columna DNI/NIF real; solo procede del CLOB o de PPFEVENTO.NIFSOLICITANTE
   const dni = (entities.dnis && entities.dnis[0])
     || (entities.nies && entities.nies[0])
     || (pago && (pago.NIF || pago.nif))
-    || (ppf && (ppf.DNISOLICITANTE || ppf.dnisolicitante))
+    || (diagData.eventos && diagData.eventos[0] && (diagData.eventos[0].NIFSOLICITANTE || diagData.eventos[0].nifsolicitante))
     || (clobParsed && (clobParsed.solicitud?.nif || clobParsed.persona?.nif || clobParsed.datospersonales?.nif))
     || (t0 && t0.dniNie)
     || "NNNNNNN";
 
-  // Matrícula
+  // Matrícula (solo disponible en el CLOB, PPFDATOS no tiene columna propia)
   const matricula = (entities.matriculas && entities.matriculas[0])
     || (clobParsed && (clobParsed.vehiculo?.matricula || clobParsed.datosvehiculo?.matricula))
-    || (ppf && (ppf.MATRICULA || ppf.matricula))
     || (t0 && t0.matricula)
     || "NNNNNNN";
 
   // Procedimiento y Modelo
+  // Nota: PPFDATOS no tiene CODFORM; procedimiento/modelo llegan del ticket, del CLOB
+  // o de PPFEVENTO.CODPROCEDIMIENTO (columna real confirmada por DESCRIBE)
   const proc = (entities && entities.procedimiento)
     || (clobParsed && (clobParsed.solicitud?.proc || clobParsed.codigoProcedimiento))
-    || (ppf && ppf.CODFORM && String(ppf.CODFORM).replace(/^M/i, ""))
+    || (diagData.eventos && diagData.eventos[0] && (diagData.eventos[0].CODPROCEDIMIENTO || diagData.eventos[0].codprocedimiento))
     || (t0 && t0.procedimiento)
     || "1197";
 
-  const modelo = (entities && entities.procedimiento)
+  const modelo = (entities && entities.modelo)
     || (clobParsed && clobParsed.codForm && String(clobParsed.codForm).match(/[FfMm]?(\d{3,6})/)?.[1])
-    || (ppf && ppf.CODFORM && String(ppf.CODFORM).replace(/^M/i, ""))
     || "620";
 
   // IDPAGO, CODESTADO e IMPORTE
@@ -757,9 +784,9 @@ function buildVars(entities = {}, diagData = {}, ticketId = null) {
   }
   if (!n28) n28 = "NNNNNNNNNNNNNNNNNNNNNNNNNNNN";
 
-  // GUID
-  let guid = null;
-  if (clobParsed) {
+  // GUID (preferir columna real IDGUID de PASAPAGO.PAGO sobre el regex sobre texto)
+  let guid = (pago && (pago.IDGUID || pago.idguid)) || null;
+  if (!guid && clobParsed) {
     if (clobParsed.guid) guid = clobParsed.guid;
     else if (clobParsed.solicitud?.guid) guid = clobParsed.solicitud.guid;
     else {
@@ -790,8 +817,9 @@ function buildVars(entities = {}, diagData = {}, ticketId = null) {
     }
   }
 
-  // Fecha
-  const fecha = (pago && (pago.FECESTADO || pago.fecestado))
+  // Fecha (preferir FECPAGO —fecha real de pago— sobre FECESTADO —fecha de cambio de estado—)
+  const fecha = (pago && (pago.FECPAGO || pago.fecpago))
+    || (pago && (pago.FECESTADO || pago.fecestado))
     || (ppf && (ppf.FECALTA || ppf.fecalta))
     || (entities && entities.fecha)
     || "DD/MM/YYYY";
@@ -811,7 +839,7 @@ function buildVars(entities = {}, diagData = {}, ticketId = null) {
     IMPORTE:   String(importe),
     FECHA:     String(fecha),
     ENTIDAD:   "3058",
-    FRAGMENTO_CCO: "NNNNNNNNNNNNNN",
+    FRAGMENTO_CCO: String((pago && (pago.CCO || pago.cco)) || "NNNNNNNNNNNNNN"),
     IDPAGO:    String(idPago),
     // AutoFirma / Presentador
     PROC:      String(proc),
@@ -820,6 +848,9 @@ function buildVars(entities = {}, diagData = {}, ticketId = null) {
     MODELO:    String(modelo),
     URL_PRESENTADOR: urlPresentador,
     URL_DOCS:  urlDocs,
+    SALUDO: new Date().getHours() < 14 ? "Buenos días" : "Buenas tardes",
+    IDESTADO: String((ppf && (ppf.IDESTADO || ppf.idestado)) || "NNNNNNN"),
+    ESTADO_PAGO: String((pago && (pago.IDDESCOESTADO || pago.CODESTADO || pago.codestado)) || "no confirmado"),
     // SIRA
     EJE_CORREO: new Date().getFullYear(),
     NUM_CORREO: "NNNNN",

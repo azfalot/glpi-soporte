@@ -100,6 +100,7 @@ function extractProc(entities, clobParsed, diagData) {
     if (clobParsed.codigoProcedimiento) return String(clobParsed.codigoProcedimiento);
   }
   // 2. De las entidades extraídas del ticket
+  if (entities.modelo) return String(entities.modelo);
   if (entities.procedimiento) return String(entities.procedimiento);
   // 3. De PPFDATOS
   const ppf = diagData?.ppfdatos || diagData?.jtraspasoResult?.ppfdatos;
@@ -120,6 +121,7 @@ function extractModelo(entities, clobParsed, diagData) {
     }
     if (clobParsed.solicitud?.proc) return String(clobParsed.solicitud.proc);
   }
+  if (entities.modelo) return String(entities.modelo);
   if (entities.procedimiento) return String(entities.procedimiento);
   const ppf = diagData?.ppfdatos || diagData?.jtraspasoResult?.ppfdatos;
   if (ppf && ppf.CODFORM) {

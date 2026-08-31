@@ -63,6 +63,7 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
 /* Listo: negrita fuerte */
 .ticket-item[data-status="done"] .ttitle    { opacity:1;   font-weight:700; color:var(--txt); }
 .ticket-item[data-status="error"] .ttitle   { opacity:.7;  font-weight:400; color:var(--err); }
+.ticket-item[data-status="pending"] .tstate { background:var(--warn); }
 .ticket-item .tstate{position:absolute;right:10px;top:50%;transform:translateY(-50%);
                      width:8px;height:8px;border-radius:50%}
 .ticket-glpi-link{
@@ -109,7 +110,7 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
 .step.err{color:var(--err);border-bottom-color:var(--err)}
 
 /* Contenido principal scrollable */
-.content{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.content{flex:1;overflow-y:auto;padding:10px 20px 20px;display:flex;flex-direction:column;gap:16px}
 
 /* ── Cards colapsables ── */
 .card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--r)}
@@ -199,8 +200,8 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
 <!-- Top bar -->
 <div class="topbar">
   <h1>🔧 Soporte Incidencias LIVE</h1>
-  <div class="topbar-badge" id="badge-mode" style="cursor:pointer;padding:4px 10px;background:var(--bg3);border-radius:var(--r);user-select:none" onclick="toggleDataMode()" title="Clic para alternar entre Modo Simulación y Conexión Real">
-    <span class="status-dot ok" id="dot-mode"></span> <strong id="mode-text">MOCK (Offline)</strong>
+  <div class="topbar-badge" id="badge-mode" style="padding:4px 10px;background:var(--bg3);border-radius:var(--r);user-select:none" title="La aplicación utiliza conexión LIVE">
+    <span class="status-dot running" id="dot-mode"></span> <strong id="mode-text">LIVE (Producción)</strong>
   </div>
   <div class="topbar-badge" id="badge-glpi">
     <span class="status-dot" id="dot-glpi"></span> GLPI
@@ -210,6 +211,9 @@ body{font-family:"Segoe UI",Arial,sans-serif;background:var(--bg);color:var(--tx
   </div>
   <button class="btn btn-ghost" id="btn-reload-kb" onclick="reloadKbRules()" title="Recargar reglas KB de data/kb_rules.json" style="font-size:.7rem;padding:3px 8px">
     🔄 Recargar KB
+  </button>
+  <button class="btn btn-ghost" id="btn-close-session" title="Cerrar sesión persistente de Firefox (GLPI + jTraspaso)" style="font-size:.7rem;padding:3px 8px">
+    ⏻ Cerrar sesión
   </button>
   <div id="bg-status" style="font-size:.7rem;color:var(--txt2)"></div>
 </div>
@@ -535,6 +539,24 @@ document.getElementById("manual-id").onkeydown = e => {
   if (e.key === "Enter") document.getElementById("btn-manual").click();
 };
 
+document.getElementById("btn-close-session").onclick = async () => {
+  const btn = document.getElementById("btn-close-session");
+  if (!confirm("¿Cerrar la sesión persistente de Firefox (GLPI + jTraspaso)? Habrá que volver a autenticar con certificado en la próxima consulta.")) return;
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = "⏳ Cerrando…";
+  try {
+    await api("/api/session/close", {});
+    setDot("glpi", "idle");
+    setDot("jtras", "idle");
+    btn.textContent = "✅ Cerrada";
+  } catch (e) {
+    btn.textContent = "❌ Error";
+  } finally {
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 2000);
+  }
+};
+
 function setBandejaDetail(text) {
   const el = document.getElementById("bandeja-loading-detail");
   if (el) el.textContent = text;
@@ -612,6 +634,7 @@ function showBandejaItems() {}
 function badgeIcon(status) {
   if (status === "done")    return `<span style="color:var(--ok);font-size:.7rem" title="Listo">✓</span>`;
   if (status === "running") return `<span class="spin" style="width:9px;height:9px;border-width:1.5px" title="Procesando…"></span>`;
+  if (status === "pending") return `<span style="color:var(--warn);font-size:.7rem" title="Pendiente de carga">●</span>`;
   if (status === "error")   return `<span style="color:var(--err);font-size:.7rem" title="Error">✕</span>`;
   return `<span style="color:var(--bg4);font-size:.7rem" title="Pendiente">◌</span>`;
 }
@@ -821,6 +844,19 @@ function renderJtraspaso(r, codsol) {
   const idestado  = ppf ? parseInt(ppf.IDESTADO || ppf.idestado || "0") : null;
   const codestado = pago ? (pago.CODESTADO || pago.codestado || "") : null;
   const estadoClr = idestado === 5 ? "p-yellow" : idestado ? "p-green" : "p-red";
+  const estadoSolicitud = {
+    5: { label: "Presentación pendiente", detail: "La solicitud y el pago pueden existir, pero falta completar la presentación electrónica." },
+    6: { label: "Presentación completada", detail: "La solicitud figura como completada; conviene comprobar también eventos y documentación." }
+  }[idestado] || (idestado ? { label: "Estado no documentado en la KB", detail: "Conservar el código y confirmar su significado en el catálogo o en los eventos." } : null);
+  const estadoPago = {
+    PA: { label: "Pagado", detail: "El pago consta realizado." },
+    PE: { label: "Pendiente", detail: "El pago aún no consta confirmado." },
+    FN: { label: "Pendiente de finalización", detail: "El pago no debe darse por confirmado sin revisar los eventos." },
+    CA: { label: "Cancelado/anulado", detail: "Este registro no debe tratarse como el pago válido sin comparar los demás intentos." }
+  }[String(codestado || "").toUpperCase()] || (codestado ? { label: "Código de pago no documentado", detail: "Mostrar el código y verificarlo con el catálogo de Pasarela de Pagos." } : null);
+  const rawText = String(r.rawOutput || "");
+  const hasCod012 = /COD012/i.test(rawText) ||
+    (r.eventos || []).some(ev => /COD012/i.test(String(ev.RESPUESTA_PREVIEW || ev.respuesta_preview || ev.RESPUESTA || ev.respuesta || "")));
 
   // Buscar GUID en el CLOB o en rawOutput
   let guid = null, urlPresentador = null;
@@ -876,8 +912,7 @@ function renderJtraspaso(r, codsol) {
       <dt>IDDATOS</dt><dd>${esc(ppf.IDDATOS||ppf.iddatos||"—")}</dd>
       <dt>IDESTADO</dt><dd>
         <span class="pill ${estadoClr}">${esc(ppf.IDESTADO||ppf.idestado||"—")}</span>
-        ${idestado===5 ? '<span style="color:var(--warn);font-size:.7rem"> ⚠ Presentación pendiente</span>' : ""}
-        ${idestado===6 ? '<span style="color:var(--ok);font-size:.7rem"> ✓ Completada</span>' : ""}
+        ${estadoSolicitud ? `<span style="color:${idestado===5 ? 'var(--warn)' : idestado===6 ? 'var(--ok)' : 'var(--txt2)'};font-size:.7rem"> ${idestado===6 ? "✓" : "⚠"} ${esc(estadoSolicitud.label)}</span>` : ""}
       </dd>
       <dt>CODFORM</dt><dd>${esc(ppf.CODFORM||ppf.codform||"—")}</dd>
       <dt>GUID</dt><dd><code style="font-size:.7rem;word-break:break-all">${esc(guid||"— (ver JSON)")}</code></dd>
@@ -895,8 +930,7 @@ function renderJtraspaso(r, codsol) {
     body += `<dl class="kv" style="margin-bottom:14px">
       <dt>CODESTADO</dt><dd>
         <span class="pill ${pagoOk?'p-green':pagoPend?'p-yellow':'p-red'}">${esc(codestado||"—")}</span>
-        ${pagoOk ? '<span style="color:var(--ok);font-size:.7rem"> ✓ Pagado</span>' : ""}
-        ${pagoPend ? '<span style="color:var(--warn);font-size:.7rem"> ⚠ Pendiente</span>' : ""}
+        ${estadoPago ? `<span style="color:${pagoOk ? 'var(--ok)' : pagoPend ? 'var(--warn)' : 'var(--txt2)'};font-size:.7rem"> ${pagoOk ? "✓" : "⚠"} ${esc(estadoPago.label)}</span>` : ""}
       </dd>
       <dt>IMPORTE</dt><dd><strong>${esc(pago.IMPORTE||pago.importe||"—")}</strong></dd>
       <dt>NIF</dt><dd>${esc(pago.NIF||pago.nif||"—")}</dd>
@@ -905,6 +939,19 @@ function renderJtraspaso(r, codsol) {
     </dl>`;
   } else {
     body += `<div class="alert a-warn" style="margin-bottom:14px">Sin datos de pago encontrados</div>`;
+  }
+
+  // Interpretación operativa: conservar siempre los códigos originales.
+  if (estadoSolicitud || estadoPago || hasCod012) {
+    body += `<details open style="margin-bottom:14px">
+      <summary style="cursor:pointer;font-size:.75rem;color:var(--txt2)">🧭 Interpretación de estados</summary>
+      <div style="margin-top:8px;font-size:.75rem;line-height:1.5">
+        ${estadoSolicitud ? `<div><strong>Solicitud ${esc(String(idestado))}:</strong> ${esc(estadoSolicitud.detail)}</div>` : ""}
+        ${estadoPago ? `<div><strong>Pago ${esc(String(codestado).toUpperCase())}:</strong> ${esc(estadoPago.detail)}</div>` : ""}
+        ${hasCod012 ? `<div class="alert a-info" style="margin-top:8px">El resultado contiene <strong>COD012</strong>: seguir el manual y ofrecer la URL de confirmación/documentación <code>URLOKTRIBUTOS</code>; no solicitar un nuevo pago.</div>` : ""}
+        <div style="margin-top:8px;color:var(--txt2)">Los códigos técnicos se mantienen visibles para auditoría. Los códigos no documentados no se convierten automáticamente en “correcto” o “error”.</div>
+      </div>
+    </details>`;
   }
 
   // ── URL Presentador ───────────────────────────────────────────────────

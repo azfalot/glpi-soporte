@@ -79,9 +79,11 @@ function cacheError(ticketId, err) {
 /**
  * @param {string|number} ticketId
  * @param {Function}      progress   callback (step, detail)
- * @param {boolean}       keepOpen   si true, NO cierra Firefox al terminar (para pipelines en cadena)
+ * @param {boolean}       closeAfter si true, cierra Firefox al terminar este ticket.
+ *                                   Por defecto false: se mantiene la sesión persistente
+ *                                   (login/certificado ya validado) para el siguiente ticket.
  */
-async function runTicketPipeline(ticketId, progress, keepOpen = false) {
+async function runTicketPipeline(ticketId, progress, closeAfter = false) {
   ticketStore.init(ticketId);
   try {
     // PASO 1: Leer ticket de GLPI
@@ -115,7 +117,7 @@ async function runTicketPipeline(ticketId, progress, keepOpen = false) {
         : `token (${entities.dnis[0] || entities.nies[0] || entities.matriculas[0]})`;
       progress("jtraspaso", `Consultando jTraspaso — ${label}...`);
       try {
-        const jtResult = await jtras.diagnoseFull(codsol, null, entities);
+        const jtResult = await jtras.diagnoseFull(codsol, progress, entities);
         cacheSet(ticketId, "jtras", jtResult);
         queue.broadcast({ type: "jtraspaso:ready", ticketId, codsol: jtResult.codsol, data: jtResult });
         diagBase.jtraspasoResult = jtResult;
@@ -153,7 +155,7 @@ async function runTicketPipeline(ticketId, progress, keepOpen = false) {
     queue.broadcast({ type: "ticket:cached", ticketId, status: "error", error: e.message });
     throw e;
   } finally {
-    if (!keepOpen) {
+    if (closeAfter) {
       setImmediate(async () => {
         await glpi.closeContext().catch(() => {});
         await jtras.closeContext().catch(() => {});
@@ -164,12 +166,12 @@ async function runTicketPipeline(ticketId, progress, keepOpen = false) {
 
 // ── Pipeline automático de ticket ────────────────────────────────────────────
 app.post("/api/ticket/process", async (req, res) => {
-  const { ticketId } = req.body || {};
+  const { ticketId, force = false } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: "ticketId requerido" });
 
   // Si ya está en caché y completo, devolver inmediatamente el estado
   const cached = cacheGet(ticketId);
-  if (cached && cached.status === "done") {
+  if (!force && cached && cached.status === "done") {
     res.json({ ok: true, ticketId, cached: true });
     // Re-emitir todos los eventos cacheados para este cliente (nuevo SSE replay)
     if (cached.ticket)   queue.broadcast({ type: "ticket:ready",     ticketId, data: cached.ticket });
@@ -181,7 +183,7 @@ app.post("/api/ticket/process", async (req, res) => {
   }
 
   // Si ya está corriendo, solo responder OK (los eventos SSE ya están llegando)
-  if (cached && cached.status === "running") {
+  if (!force && cached && cached.status === "running") {
     return res.json({ ok: true, ticketId, running: true });
   }
 
@@ -218,7 +220,8 @@ app.post("/api/glpi/enrich/apply", async (req, res) => {
   try {
     const result = await enrich.applyEnrichment(proposal);
     queue.broadcast({ type: "enrich:applied", ticketId: proposal.ticketId, data: result });
-    setImmediate(() => glpi.closeContext().catch(() => {}));
+    // Sesión persistente: no cerramos el contexto de GLPI tras aplicar.
+    // Se cierra explícitamente vía /api/session/close si el técnico lo desea.
     res.json({ ok: true, ...result });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -249,7 +252,9 @@ app.post("/api/tickets/refresh", (_req, res) => {
 
 /**
  * Lanza el pipeline de cada ticket de forma secuencial.
- * Firefox se mantiene abierto entre tickets (keepOpen=true) y solo se cierra al final.
+ * Firefox se mantiene abierto como sesión persistente entre tickets y entre
+ * cadenas de bandeja — solo se cierra ante fallo de contexto o cierre manual
+ * explícito vía /api/session/close.
  */
 function scheduleTicketPipelines(tickets) {
   const pending = tickets.filter(t => {
@@ -262,31 +267,34 @@ function scheduleTicketPipelines(tickets) {
   for (let i = 0; i < pending.length; i++) {
     const t = pending[i];
     const id = t.id;
-    const isLast = i === pending.length - 1;
     chain = chain.then(() => {
       ticketStore.init(id);
       queue.broadcast({ type: "ticket:cached", ticketId: id, status: "running" });
       return queue.run(
         `ticket-${id}`,
         `Procesando ticket #${id}`,
-        // keepOpen=true en todos menos el último — Firefox no se cierra entre tickets
-        (progress) => runTicketPipeline(id, progress, !isLast)
+        // closeAfter=false: la sesión de Firefox persiste para el siguiente ticket
+        (progress) => runTicketPipeline(id, progress, false)
       );
     }).catch(() => {
-      // Si un ticket falla, cerrar Firefox y continuar con el siguiente
+      // Si un ticket falla por contexto roto, cerrar y dejar que el siguiente relance uno nuevo
       glpi.closeContext().catch(() => {});
       jtras.closeContext().catch(() => {});
     });
   }
-
-  // Garantía extra: cerrar Firefox cuando toda la cadena acabe
-  chain.finally(() => {
-    setTimeout(() => {
-      glpi.closeContext().catch(() => {});
-      jtras.closeContext().catch(() => {});
-    }, 2000);
-  });
 }
+
+// Cierre explícito de la sesión persistente de Firefox (GLPI + jTraspaso).
+// Útil cuando el técnico termina su turno o quiere forzar un relogin limpio.
+app.post("/api/session/close", async (_req, res) => {
+  try {
+    await glpi.closeContext().catch(() => {});
+    await jtras.closeContext().catch(() => {});
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ── Schema Explorer (background) ─────────────────────────────────────────────
 app.get("/api/schema/status", (_req, res) => {
@@ -487,14 +495,32 @@ const PORT = Number(process.env.PORT || 8788);
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`Soporte LIVE → http://127.0.0.1:${PORT}`);
 
+  // Limpieza preventiva: procesos Firefox huérfanos de sesiones anteriores
+  // (crashes, cierres forzosos del proceso Node, dobles instancias) bloquean
+  // los perfiles persistentes (.profile-glpi-ff / .profile-jtras-ff) y provocan
+  // "Failed to launch the browser process" al intentar relanzar el contexto.
+  killOrphanPlaywrightFirefox();
+
   // Cargar bandeja al arrancar y lanzar pipeline de todos los tickets
   queue.run("load-tickets-startup", "Cargando bandeja GLPI al iniciar", async (progress) => {
     progress("glpi", "Conectando con GLPI...");
     const result = await glpi.listTicketsToProcess();
     queue.broadcast({ type: "tickets:ready", data: result });
-    // Nota: NO cerramos Firefox aquí — scheduleTicketPipelines lo reutiliza
-    // El cierre ocurre al final de la cadena de tickets en scheduleTicketPipelines
+    // Nota: NO cerramos Firefox aquí — la sesión persiste entre tickets y
+    // entre recargas de bandeja. Se cierra solo con /api/session/close.
     scheduleTicketPipelines(result.tickets || []);
     return result;
   });
 });
+
+// Cierre limpio de la sesión persistente de Firefox al parar el servidor
+// (Ctrl+C, kill, reinicio) — evita dejar procesos huérfanos que bloqueen
+// los perfiles persistentes en el próximo arranque.
+async function shutdown() {
+  console.log("Cerrando sesión de Firefox antes de salir...");
+  await glpi.closeContext().catch(() => {});
+  await jtras.closeContext().catch(() => {});
+  process.exit(0);
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

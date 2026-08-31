@@ -140,6 +140,12 @@ function draftFollowup(ticket, entities, classification, diagData) {
 
   // AutoFirma estado5: usar plantilla del manual
   if (cat.id === "AUTOFIRMA_ESTADO5" && cat.followupTemplate) {
+    const diagnosisText = JSON.stringify(diagData).toUpperCase();
+    const alreadyPresented = /\bCOD012\b/.test(diagnosisText)
+      || /\bURLOKTRIBUTOS\b/.test(diagnosisText);
+    if (alreadyPresented && cat.followupTemplate.alreadyPresented) {
+      return fillTemplate(cat.followupTemplate.alreadyPresented, vars);
+    }
     return fillTemplate(cat.followupTemplate.standard, vars);
   }
 

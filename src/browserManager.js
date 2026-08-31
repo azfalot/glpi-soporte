@@ -44,7 +44,9 @@ async function launchContext(profileDirName, options = {}) {
   const context = await firefox.launchPersistentContext(profilePath, {
     headless: isHeadless,
     viewport: options.viewport || { width: 1440, height: 900 },
-    ignoreHTTPSErrors: true,
+    ignoreHTTPSErrors: options.ignoreHTTPSErrors !== undefined
+      ? options.ignoreHTTPSErrors === true
+      : process.env.IGNORE_HTTPS_ERRORS === "true",
     firefoxUserPrefs: { ...FF_PREFS, ...(options.firefoxUserPrefs || {}) }
   });
 

@@ -5,6 +5,8 @@
 .profile-jtras/
 .profile-jtras-ff/
 schema-cache/
+data/attachments/
+data/ticket_history.json
 srv.log
 srv.err
 *.log

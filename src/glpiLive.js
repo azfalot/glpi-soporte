@@ -1,6 +1,7 @@
 "use strict";
 
 const { launchContext, closeContextSafe } = require("./browserManager");
+const { processAttachments } = require("./attachmentProcessor");
 
 const PROFILE = ".profile-glpi-ff";
 
@@ -130,7 +131,7 @@ async function readTicket(ticketId) {
     await page.waitForTimeout(2000);
   }
 
-  return page.evaluate((targetId) => {
+  const ticket = await page.evaluate((targetId) => {
     const clean    = s => (s||"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim();
     const cleanHtml = s => (s||"").replace(/\s+/g," ").trim();
     const ticketId = (document.title.match(/Tickets?\s*[#\-]?\s*(\d+)/i)||[])[1]
@@ -155,12 +156,25 @@ async function readTicket(ticketId) {
       const bodyEl = item.querySelector(".rich_text_container")||item.querySelector(".title")||item.querySelector(".displayed_content")||contentEl;
       const content = bodyEl ? clean(bodyEl.innerText) : "";
       const attachments = Array.from(item.querySelectorAll("a[href*='document.send.php'], a[href*='document']"))
-        .map(a => ({ label: cleanHtml(a.textContent||""), href: a.getAttribute("href")||"" }));
+        .map(a => ({ label: cleanHtml(a.textContent||""), href: a.href || a.getAttribute("href")||"" }));
       return { date, user, type, content, attachments };
     }).filter(e => e.content.length>1 || e.attachments.length>0);
     return { ticketId: String(ticketId), title, timelineCount: timeline.length, timeline,
              _debug: { url: location.href, h_items_raw: items.length } };
   }, String(ticketId));
+
+  const allAttachments = ticket.timeline.flatMap(entry => entry.attachments || []);
+  if (allAttachments.length) {
+    const processed = await processAttachments(ticketId, allAttachments, page.request);
+    let index = 0;
+    for (const entry of ticket.timeline) {
+      entry.attachments = (entry.attachments || []).map(() => processed[index++]);
+      for (const attachment of entry.attachments) {
+        if (attachment.text) entry.content = `${entry.content}\n\n[Texto extraído de ${attachment.label}]\n${attachment.text}`;
+      }
+    }
+  }
+  return ticket;
 }
 
 /** Devuelve la página activa SIN lanzar Firefox. Null si el contexto está cerrado. */
@@ -170,7 +184,5 @@ function getActivePage() {
 }
 
 module.exports = { getPage, getActivePage, closeContext, listTicketsToProcess, readTicket };
-
-
 
 

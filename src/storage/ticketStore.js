@@ -39,6 +39,7 @@ class TicketStore {
       fs.writeFileSync(STORE_FILE, JSON.stringify(obj, null, 2), "utf8");
     } catch (err) {
       console.warn("[TicketStore] Error guardando historial de tickets:", err.message);
+      throw new Error(`No se pudo persistir el historial de tickets: ${err.message}`, { cause: err });
     }
   }
 
