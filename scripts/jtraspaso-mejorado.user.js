@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         jTraspaso - interfaz mejorada
 // @namespace    soporte-incidencias-live
-// @version      2.0.0
+// @version      2.2.0
 // @description  Mejora la lectura y el uso del formulario SQLPlus de jTraspaso: layout completo + reconstrucción/formateo de CLOBs (JSON_LEN/EVT_LEN) y resaltado de errores ORA.
 // @match        https://jtraspaso.carm.es/jTraspaso/*
 // @run-at       document-idle
@@ -63,13 +63,15 @@
       #st-main a[href*="IDCONTENIDO"] {
         display: none !important;
       }
-      /* Todo lo que hay por encima de "Entorno" (logo+titulo, reloj de sesion, menu de pestañas,
-         icono info + aviso de "peticion realizada correctamente", titulo "Traspaso BBDD") no aporta
-         nada en modo diagnostico: se oculta entero, solo queda visible desde Entorno hacia abajo. */
+      /* Todo lo que hay por encima de "Entorno" (logo+titulo, reloj de sesion, indicador de sesion
+         (panelReloj), aviso de sesion caducada, menu de pestañas, icono info + aviso de "peticion
+         realizada correctamente", titulo "Traspaso BBDD") no aporta nada en modo diagnostico: se
+         oculta entero, solo queda visible desde Entorno hacia abajo. */
       #st-main table.header.informacionAplicacion,
       #st-main table#url.relojSesion,
+      #st-main table#panelReloj.relojSesion,
+      #st-main table#sessionTimeoutMessageId,
       #st-main table.BarraMenu,
-      #st-main fieldset > legend,
       #st-main ul#trassqlplus\:mensajeError {
         display: none !important;
       }
@@ -88,6 +90,13 @@
         border: none !important;
       }
       legend { font-size: 12px !important; color: var(--st-muted) !important; }
+      #st-main fieldset > legend[data-atrm-colapsable="1"] {
+        background: var(--st-code);
+        border: 1px solid var(--st-border);
+        border-radius: 4px;
+        padding: 3px 8px !important;
+        margin-bottom: 4px;
+      }
       /* La Salida se saca del flujo de la tabla nativa (ver moverSalidaAFullscreen) y pasa a formar
          parte de la página normal, ocupando todo el espacio vertical restante (sin marco/ventana
          flotante propia: es una sección más, fundida con el resto de la página). */
@@ -112,6 +121,11 @@
       #st-main #mainFormContainer {
         flex: 0 0 auto;
         margin: 0 !important;
+      }
+      /* jTraspaso reserva 300px fijos con .formulario-container (min-height, para el spinner de
+         carga nativo). Al plegar "Traspaso BBDD" ese hueco se queda vacío: se anula el mínimo. */
+      #st-main .formulario-container {
+        min-height: 0 !important;
       }
       #st-salida-panel span#trassqlplus\:salida {
         display: block;
@@ -303,6 +317,11 @@
       #st-main td.atrm-json summary::before { content: "▶ "; }
       #st-main td.atrm-json details[open] summary::before { content: "▼ "; }
       #st-main td.atrm-json summary:hover { text-decoration: underline; }
+      /* Resaltado de líneas dentro de la Salida cruda (ver resaltarSalida) */
+      .atrm-linea-error { color: #ff6b6b; font-weight: 700; }
+      .atrm-linea-seccion { color: #58a6ff; font-weight: 700; }
+      .atrm-linea-ok { color: #3fb950; }
+      .atrm-linea-info { color: #d29922; }
       .atrm-clob-resultado {
         display: block !important;
         margin: 10px 0 !important;
@@ -536,6 +555,35 @@
     });
   }
 
+  // ── Resalta con color líneas reconocibles del texto crudo de SQL*Plus (cabeceras de sección,
+  // errores ORA, filas seleccionadas) para facilitar la lectura visual rápida de la Salida. ──
+  function resaltarSalida(contenido) {
+    contenido.querySelectorAll("pre").forEach(pre => {
+      if (pre.dataset.atrmResaltado === "1") return;
+      // No tocar los <pre> ya generados por nosotros mismos (JSON formateado dentro de <details>)
+      if (pre.closest("details.atrm-clob-resultado, details.atrm-json, td.atrm-json")) return;
+      pre.dataset.atrmResaltado = "1";
+
+      const lineas = pre.textContent.split("\n");
+      pre.textContent = "";
+      lineas.forEach((linea, indice) => {
+        const span = document.createElement("span");
+        span.textContent = linea;
+        if (/ORA-\d{5}/.test(linea) || linea.includes("ERROR :::")) {
+          span.className = "atrm-linea-error";
+        } else if (/^====\s*\d+\)/.test(linea.trim())) {
+          span.className = "atrm-linea-seccion";
+        } else if (/petición se ha realizado correctamente/i.test(linea)) {
+          span.className = "atrm-linea-ok";
+        } else if (/\d+\s+filas?\s+seleccionadas?\./i.test(linea.trim())) {
+          span.className = "atrm-linea-info";
+        }
+        pre.appendChild(span);
+        if (indice < lineas.length - 1) pre.appendChild(document.createTextNode("\n"));
+      });
+    });
+  }
+
   function formatearResultados() {
     const contenido = document.getElementById("trassqlplus:salida");
     if (!contenido) return;
@@ -581,7 +629,9 @@
     procesarBloqueClob(contenido, "JSON_LEN", "JSON DATOS extraído del CLOB (PPFDATOS.DATOS)");
     procesarBloqueClob(contenido, "EVT_LEN", "JSON RESPUESTA extraído del CLOB (PPFEVENTO.RESPUESTA, último evento)");
 
+    resaltarSalida(contenido);
     moverSalidaAFullscreen();
+    colapsarBloqueFormulario();
     colapsarCamposEntrada(true);
     colapsarFilasVacias();
 
@@ -631,6 +681,37 @@
     }
   }
 
+
+  // ── Pliega el bloque completo del formulario nativo (Entorno + SQL + botones) bajo su propio
+  // <legend> "Traspaso BBDD (SQL*PLUS)", convertido en botón clicable. Colapsado por defecto para
+  // dejar sitio a la Salida; el usuario lo despliega solo si necesita cambiar Entorno o relanzar SQL. ──
+  function colapsarBloqueFormulario() {
+    const legend = document.querySelector("#st-main fieldset > legend");
+    if (!legend || legend.dataset.atrmColapsable === "1") return;
+    legend.dataset.atrmColapsable = "1";
+
+    const fieldset = legend.closest("fieldset");
+    if (!fieldset) return;
+
+    // Todo el contenido del fieldset excepto el propio legend se agrupa para poder ocultarlo entero.
+    const contenido = document.createElement("div");
+    contenido.className = "atrm-form-contenido";
+    [...fieldset.children].forEach(hijo => {
+      if (hijo !== legend) contenido.appendChild(hijo);
+    });
+    fieldset.appendChild(contenido);
+
+    legend.style.cursor = "pointer";
+    legend.style.userSelect = "none";
+    legend.textContent = "▶ " + legend.textContent;
+    contenido.style.display = "none";
+
+    legend.addEventListener("click", () => {
+      const oculto = contenido.style.display === "none";
+      contenido.style.display = oculto ? "" : "none";
+      legend.textContent = (oculto ? "▼ " : "▶ ") + legend.textContent.slice(2);
+    });
+  }
 
   // ── Oculta Comentario definitivamente y deja SQL colapsable con botón (no se usa en diagnóstico) ──
   function colapsarCamposEntrada(colapsarPorDefecto) {

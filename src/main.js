@@ -83,7 +83,7 @@ function cacheError(ticketId, err) {
  *                                   Por defecto false: se mantiene la sesión persistente
  *                                   (login/certificado ya validado) para el siguiente ticket.
  */
-async function runTicketPipeline(ticketId, progress, closeAfter = false) {
+async function runTicketPipeline(ticketId, progress, closeAfter = false, manualCodsol = null) {
   ticketStore.init(ticketId);
   try {
     // PASO 1: Leer ticket de GLPI
@@ -101,6 +101,10 @@ async function runTicketPipeline(ticketId, progress, closeAfter = false) {
     // PASO 2: Extraer entidades + clasificar KB
     progress("extract", "Extrayendo datos y clasificando...");
     const entities  = extract.extractEntities(ticket);
+    const manualValue = String(manualCodsol || "").trim();
+    if (manualValue) {
+      entities.codsol = manualValue.toUpperCase();
+    }
     const fullText  = [ticket.title || ""]
       .concat((ticket.timeline || []).map(e => e.content || ""))
       .join(" ");
@@ -127,10 +131,24 @@ async function runTicketPipeline(ticketId, progress, closeAfter = false) {
         diagBase.clobParsed = jtResult.clobParsed;
         if (jtResult.codsol && !codsol) entities.codsol = jtResult.codsol;
       } catch (e) {
+        cacheSet(ticketId, "jtrasError", { error: e.message });
         queue.broadcast({ type: "jtraspaso:error", ticketId, error: e.message });
       }
     } else {
-      queue.broadcast({ type: "jtraspaso:skip", ticketId, reason: "Sin datos identificativos en el ticket (CODSOL, DNI, matrícula)" });
+      const skip = {
+        reason: "Sin datos identificativos en el ticket (CODSOL, DNI, matrícula)",
+        sqlLog: [{
+          label: "Diagnóstico jTraspaso",
+          status: "skipped",
+          startedAt: new Date().toISOString(),
+          durationMs: 0,
+          rowCount: 0,
+          resultSummary: "No se ha ejecutado SQL: falta CODSOL, DNI/NIE o matrícula. Introduce un CODSOL manual para reconsultar.",
+          sql: ""
+        }]
+      };
+      cacheSet(ticketId, "jtrasSkip", skip);
+      queue.broadcast({ type: "jtraspaso:skip", ticketId, reason: skip.reason, data: skip });
     }
 
     // PASO 4: Generar borradores
@@ -166,7 +184,7 @@ async function runTicketPipeline(ticketId, progress, closeAfter = false) {
 
 // ── Pipeline automático de ticket ────────────────────────────────────────────
 app.post("/api/ticket/process", async (req, res) => {
-  const { ticketId, force = false } = req.body || {};
+  const { ticketId, force = false, manualCodsol = null } = req.body || {};
   if (!ticketId) return res.status(400).json({ error: "ticketId requerido" });
 
   // Si ya está en caché y completo, devolver inmediatamente el estado
@@ -177,6 +195,8 @@ app.post("/api/ticket/process", async (req, res) => {
     if (cached.ticket)   queue.broadcast({ type: "ticket:ready",     ticketId, data: cached.ticket });
     if (cached.diag)     queue.broadcast({ type: "diag:ready",       ticketId, data: cached.diag });
     if (cached.jtras)    queue.broadcast({ type: "jtraspaso:ready",  ticketId, codsol: cached.jtras.codsol, data: cached.jtras });
+    if (cached.jtrasSkip) queue.broadcast({ type: "jtraspaso:skip",  ticketId, reason: cached.jtrasSkip.reason, data: cached.jtrasSkip });
+    if (cached.jtrasError) queue.broadcast({ type: "jtraspaso:error", ticketId, error: cached.jtrasError.error });
     if (cached.drafts)   queue.broadcast({ type: "draft:ready",      ticketId, data: cached.drafts });
     if (cached.proposal) queue.broadcast({ type: "enrich:proposal",  ticketId, data: cached.proposal });
     return;
@@ -189,7 +209,7 @@ app.post("/api/ticket/process", async (req, res) => {
 
   res.json({ ok: true, ticketId, message: "Procesando en background..." });
   queue.run(`ticket-${ticketId}`, `Procesando ticket #${ticketId}`, (progress) =>
-    runTicketPipeline(ticketId, progress)
+    runTicketPipeline(ticketId, progress, false, manualCodsol)
   );
 });
 

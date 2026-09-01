@@ -19,25 +19,25 @@ console.log("▶ Iniciando suite de pruebas...");
         content: "El ciudadano con DNI 12345678Z y matrícula 1234BBB indica que no puede firmar en Autofirma.",
         attachments: []
       }
-
-      // ── Test 1b: Fechas de correo y separación modelo/procedimiento ───────────────
-      {
-        const ticket = {
-          title: "INCIDENCIA",
-          timeline: [{
-            content: "Enviado: martes, 25 de agosto de 2026. Modelo 620. Procedimiento CARM 3284. NIE Y9266444B.",
-            attachments: [{ label: "error.png", text: "COD015 error en la llamada a SANDRA" }]
-          }]
-        };
-        const entities = extract.extractEntities(ticket);
-        assert.strictEqual(entities.modelo, "620", "Debe extraer el modelo del correo");
-        assert.strictEqual(entities.procedimiento, "3284", "Debe extraer el procedimiento CARM");
-        assert.strictEqual(entities.fecha, "2026-08-25", "Debe extraer fechas en español");
-        assert.strictEqual(entities.nies[0], "Y9266444B", "Debe extraer NIE");
-        console.log("  ✔ Test 1b: Fecha/modelo/procedimiento/adjunto OK");
-      }
     ]
   };
+
+  // ── Test 1b: Fechas de correo y separación modelo/procedimiento ───────────────
+  {
+    const ticket = {
+      title: "INCIDENCIA",
+      timeline: [{
+        content: "Enviado: martes, 25 de agosto de 2026. Modelo 620. Procedimiento CARM 3284. NIE Y9266444B.",
+        attachments: [{ label: "error.png", text: "COD015 error en la llamada a SANDRA" }]
+      }]
+    };
+    const entities = extract.extractEntities(ticket);
+    assert.strictEqual(entities.modelo, "620", "Debe extraer el modelo del correo");
+    assert.strictEqual(entities.procedimiento, "3284", "Debe extraer el procedimiento CARM");
+    assert.strictEqual(entities.fecha, "2026-08-25", "Debe extraer fechas en español");
+    assert.strictEqual(entities.nies[0], "Y9266444B", "Debe extraer NIE");
+    console.log("  ✔ Test 1b: Fecha/modelo/procedimiento/adjunto OK");
+  }
 
   const entities = extract.extractEntities(ticket);
   assert.strictEqual(entities.codsol, "BtzRD5JqSAlYjCgVg1c4", "Debe extraer CODSOL de las llaves del título");

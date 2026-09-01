@@ -155,8 +155,11 @@ async function readTicket(ticketId) {
       const type = contentEl ? Array.from(contentEl.classList).find(c=>c!=="h_content"&&c!=="timeline-item-content")||"" : "";
       const bodyEl = item.querySelector(".rich_text_container")||item.querySelector(".title")||item.querySelector(".displayed_content")||contentEl;
       const content = bodyEl ? clean(bodyEl.innerText) : "";
-      const attachments = Array.from(item.querySelectorAll("a[href*='document.send.php'], a[href*='document']"))
-        .map(a => ({ label: cleanHtml(a.textContent||""), href: a.href || a.getAttribute("href")||"" }));
+      const attachments = Array.from(item.querySelectorAll(
+        "a[href*='document.send.php'], a[href*='document.php'], a[href*='front/document.php'], a[href*='download'], a[href*='upload'], a[href*='document']"
+      ))
+        .map(a => ({ label: cleanHtml(a.textContent||a.getAttribute("title")||""), href: a.href || a.getAttribute("href")||"" }))
+        .filter(a => a.href && (a.href.includes("document") || a.href.includes("download") || a.href.includes("upload") || a.href.includes("file")));
       return { date, user, type, content, attachments };
     }).filter(e => e.content.length>1 || e.attachments.length>0);
     return { ticketId: String(ticketId), title, timelineCount: timeline.length, timeline,
@@ -165,7 +168,7 @@ async function readTicket(ticketId) {
 
   const allAttachments = ticket.timeline.flatMap(entry => entry.attachments || []);
   if (allAttachments.length) {
-    const processed = await processAttachments(ticketId, allAttachments, page.request);
+    const processed = await processAttachments(ticketId, allAttachments, page.request, page.url());
     let index = 0;
     for (const entry of ticket.timeline) {
       entry.attachments = (entry.attachments || []).map(() => processed[index++]);

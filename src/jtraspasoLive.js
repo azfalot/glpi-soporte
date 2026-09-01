@@ -512,8 +512,40 @@ async function diagnoseFull(codsol, progress, entities) {
     ultimoEventoRespuestaParsed: null,
     errors:     [],
     rawOutput:  "",
-    tokenSearch: null   // resultado de búsqueda por token si no había CODSOL
+    tokenSearch: null,  // resultado de búsqueda por token si no había CODSOL
+    sqlLog:     []
   };
+
+  async function runLogged(label, sqlText) {
+    const startedAt = new Date();
+    const item = {
+      label,
+      status: "running",
+      startedAt: startedAt.toISOString(),
+      durationMs: null,
+      rowCount: 0,
+      error: null,
+      resultSummary: "",
+      sql: sqlText
+    };
+    out.sqlLog.push(item);
+    try {
+      const result = await runQuery(sqlText);
+      item.status = result.error ? "warning" : "ok";
+      item.rowCount = Array.isArray(result.rows) ? result.rows.length : 0;
+      item.error = result.error || null;
+      item.resultSummary = summarizeSqlResult(result);
+      return result;
+    } catch (e) {
+      item.status = "error";
+      item.error = e.message;
+      item.resultSummary = e.message;
+      throw e;
+    } finally {
+      item.durationMs = Date.now() - startedAt.getTime();
+      item.finishedAt = new Date().toISOString();
+    }
+  }
 
   // ── FASE 0: si no hay CODSOL, buscar por DNI/matrícula + fecha ───────────
   if (!codsol && entities) {
@@ -545,14 +577,14 @@ async function diagnoseFull(codsol, progress, entities) {
       }
       progress("schema", "Verificando estructura de tablas en jTraspaso...");
       try {
-        const schemaResult = await runQuery(buildDescribeSQL());
+        const schemaResult = await runLogged("DESCRIBE estructura base", buildDescribeSQL());
         out.schema = schemaResult.rows || [];
       } catch (e) {
         out.errors.push("DESCRIBE: " + e.message);
       }
       progress("token-search", `Buscando CODSOL por token: ${normalizedToken} (${fechaRange.desde} - ${fechaRange.hasta})...`);
       try {
-        const r0 = await runQuery(buildTokenSearchSQL(normalizedToken, fechaRange));
+        const r0 = await runLogged("Búsqueda CODSOL por token", buildTokenSearchSQL(normalizedToken, fechaRange));
         out.rawOutput = r0.rawOutput;
         out.tokenSearch = r0.rows || [];
         // Tomar el primer CODSOLICITUD encontrado
@@ -578,7 +610,7 @@ async function diagnoseFull(codsol, progress, entities) {
   progress("sql1", "Ejecutando diagnostico inicial en jTraspaso...");
   let iddatos = null;
   try {
-    const r1 = await runQuery(buildDiagSQL(codsol));
+    const r1 = await runLogged("Diagnóstico inicial por CODSOL", buildDiagSQL(codsol));
     out.rawOutput = r1.rawOutput;
     if (r1.error) out.errors.push(r1.error);
 
@@ -634,7 +666,7 @@ async function diagnoseFull(codsol, progress, entities) {
   if (codsol) {
     progress("clob", "Extrayendo CLOB DATOS (CODSOL=" + codsol + ")...");
     try {
-      const r2 = await runQuery(buildClobSQL(codsol));
+      const r2 = await runLogged("Extracción CLOB DATOS", buildClobSQL(codsol));
       out.rawOutput += "\n\n--- CLOB ---\n" + r2.rawOutput;
 
       // Reconstruir CLOB desde chunks terminados en ~ tras [[JSON_LEN=...]]
@@ -666,6 +698,24 @@ async function diagnoseFull(codsol, progress, entities) {
   return out;
 }
 
+function summarizeSqlResult(result) {
+  if (!result) return "Sin respuesta";
+  if (result.error) return result.error;
+  const rows = Array.isArray(result.rows) ? result.rows.length : 0;
+  const raw = String(result.rawOutput || "");
+  const selected = raw.match(/(\d+)\s+filas?\s+seleccionadas?/i)
+    || raw.match(/(\d+)\s+rows?\s+selected/i)
+    || raw.match(/(\d+)\s+resultados/i);
+  const markers = [];
+  const jsonLen = raw.match(/\[\[JSON_LEN=(\d+)\s+IDDATOS=(\d+)\]\]/);
+  if (jsonLen) markers.push(`JSON_LEN ${jsonLen[1]} / IDDATOS ${jsonLen[2]}`);
+  const evtLen = raw.match(/\[\[EVT_LEN=(\d+)\s+IDEVENTO=(\d+)\]\]/);
+  if (evtLen) markers.push(`EVT_LEN ${evtLen[1]} / IDEVENTO ${evtLen[2]}`);
+  if (selected) markers.push(`${selected[1]} filas/resultados`);
+  if (rows) markers.push(`${rows} filas parseadas`);
+  return markers.join(" · ") || "Ejecutada sin error detectable";
+}
+
 module.exports = {
   getPage,
   closeContext,
@@ -679,5 +729,4 @@ module.exports = {
   buildDescribeSQL,
   parseResult
 };
-
 
