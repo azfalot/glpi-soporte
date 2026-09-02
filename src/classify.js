@@ -14,18 +14,113 @@ function textFrom(ticket) {
   return parts.join(" ").toLowerCase();
 }
 
+function diagText(diagData = {}) {
+  const pieces = [];
+  if (diagData.jtraspasoResult) pieces.push(JSON.stringify(diagData.jtraspasoResult));
+  if (diagData.ppfdatos) pieces.push(JSON.stringify(diagData.ppfdatos));
+  if (diagData.pago) pieces.push(JSON.stringify(diagData.pago));
+  if (diagData.clobParsed) pieces.push(JSON.stringify(diagData.clobParsed));
+  if (Array.isArray(diagData.eventos)) pieces.push(JSON.stringify(diagData.eventos));
+  if (diagData.rawOutput) pieces.push(String(diagData.rawOutput));
+  return pieces.join(" ").toLowerCase();
+}
+
+function hasModel(text, model) {
+  return new RegExp(`\\b${model}\\b`).test(text);
+}
+
+function scoreDiagnostics(cat, text, diagData = {}) {
+  const dText = diagText(diagData);
+  const ppf = diagData.ppfdatos || (diagData.jtraspasoResult && diagData.jtraspasoResult.ppfdatos) || null;
+  const pago = diagData.pago || (diagData.jtraspasoResult && diagData.jtraspasoResult.pago) || null;
+  const clob = diagData.clobParsed || (diagData.jtraspasoResult && diagData.jtraspasoResult.clobParsed) || null;
+  const proc = String(
+    (diagData.entities && diagData.entities.procedimiento)
+    || (ppf && (ppf.CODFORM || ppf.codform || ppf.PROC || ppf.proc))
+    || (clob && (clob.solicitud?.proc || clob.codigoProcedimiento))
+    || ""
+  ).trim();
+
+  let bonus = 0;
+  let penalty = 0;
+
+  if (cat.id === "AUTOFIRMA_GLOBAL") {
+    const hasGlobalSignals = /todos los usuarios|incidencia global|afectando a la firma|presentador/.test(text);
+    const hasSpecificSignals = ppf || pago || clob || hasModel(text, "600") || hasModel(text, "620") || hasModel(text, "651");
+    if (hasGlobalSignals) bonus += 2;
+    if (hasSpecificSignals) penalty += 3;
+  }
+
+  if (cat.id === "AUTOFIRMA_ESTADO5") {
+    if (ppf || pago || clob) bonus += 2;
+    if ((pago && String(pago.CODESTADO || pago.codestado || "").toUpperCase() === "PA") || /estado 5|pagado|pago ok|presentacion pendiente/.test(text + " " + dText)) {
+      bonus += 3;
+    }
+    if (/cod012|urloktributos|presentado correctamente|ya ha sido presentada/.test(text + " " + dText)) {
+      bonus += 2;
+    }
+  }
+
+  if (cat.id === "PASARELA_CCO") {
+    if (pago) bonus += 2;
+    if (/cco|ajustaccopago|fragmento/.test(text + " " + dText)) bonus += 3;
+  }
+  if (cat.id === "PASARELA_FN") {
+    if (pago) bonus += 2;
+    if (/fn|finalizado|actualizar fn/.test(text + " " + dText)) bonus += 3;
+  }
+  if (cat.id === "PASARELA_PA") {
+    if (pago) bonus += 2;
+    if (/pa|pago anticipado|actualizar pa/.test(text + " " + dText)) bonus += 3;
+  }
+
+  if (cat.id === "MODELO_620_ESTADO" || cat.id === "MODELO_620_JSON") {
+    if (ppf || /620/.test(proc) || hasModel(text, "620")) bonus += 3;
+    if (/idestado|json|clob|ppfdatos/.test(text + " " + dText)) bonus += 2;
+  }
+  if (cat.id === "MODELO_600_JSON") {
+    if (ppf || /600/.test(proc) || hasModel(text, "600")) bonus += 3;
+    if (/json|clob|ppfdatos/.test(text + " " + dText)) bonus += 2;
+  }
+  if (cat.id === "MODELO_651_JSON") {
+    if (ppf || /651/.test(proc) || hasModel(text, "651")) bonus += 3;
+    if (/json|clob|ppfdatos/.test(text + " " + dText)) bonus += 2;
+  }
+
+  if (cat.id === "GENERAL" && (ppf || pago || clob)) {
+    bonus += 1;
+  }
+
+  return { bonus, penalty };
+}
+
 function classify(ticket, diagnoseResult) {
   const text    = textFrom(ticket);
-  const matches = kbSearch(text, 3);
+  const matches = kbSearch(text, 10).map(match => {
+    const tweak = scoreDiagnostics(match.category, text, diagnoseResult);
+    return {
+      ...match,
+      score: match.score + tweak.bonus - tweak.penalty,
+      baseScore: match.score,
+      diagBonus: tweak.bonus,
+      diagPenalty: tweak.penalty
+    };
+  }).sort((a, b) => b.score - a.score || b.baseScore - a.baseScore);
   const best    = matches[0];
-  const confidence = best.score >= 2 ? "alta" : best.score === 1 ? "media" : "baja";
+  const confidence = best.score >= 4 ? "alta" : best.score >= 2 ? "media" : "baja";
   return {
     kbMatch:         best,
-    kbMatches:       matches,
+    kbMatches:       matches.slice(0, 3),
     confidence,
     matchedKeywords: best.score > 0
       ? (best.category.keywords || []).filter(kw => text.includes(kw))
-      : []
+      : [],
+    evidence: {
+      hasPpfdatos: !!(diagnoseResult.ppfdatos || (diagnoseResult.jtraspasoResult && diagnoseResult.jtraspasoResult.ppfdatos)),
+      hasPago: !!(diagnoseResult.pago || (diagnoseResult.jtraspasoResult && diagnoseResult.jtraspasoResult.pago)),
+      hasClob: !!(diagnoseResult.clobParsed || (diagnoseResult.jtraspasoResult && diagnoseResult.jtraspasoResult.clobParsed)),
+      eventCount: Array.isArray(diagnoseResult.eventos) ? diagnoseResult.eventos.length : 0
+    }
   };
 }
 
@@ -55,6 +150,13 @@ function draftTask(ticket, entities, classification, diagData) {
   } else {
     tramiteInfo = "  (!) Sin registros encontrados en jTraspaso";
   }
+
+  const diagEvidence = [
+    `  - PPFDATOS: ${classification.evidence.hasPpfdatos ? "sí" : "no"}`,
+    `  - PAGO: ${classification.evidence.hasPago ? "sí" : "no"}`,
+    `  - CLOB: ${classification.evidence.hasClob ? "sí" : "no"}`,
+    `  - EVENTOS: ${classification.evidence.eventCount}`
+  ].join("\n");
 
   const tidSection = cat.tidExamples.length
     ? cat.tidExamples.map(id => `  - TID ${id}`).join("\n")
@@ -113,6 +215,9 @@ ACCIONES A REALIZAR:
     "RESULTADOS jTraspaso:",
     tramiteInfo,
     "",
+    "EVIDENCIA DEL DIAGNOSTICO:",
+    diagEvidence,
+    "",
     taskBody,
     "",
     "TICKETS SIMILARES EN KB:",
@@ -151,9 +256,9 @@ function draftFollowup(ticket, entities, classification, diagData) {
 
   let body = "";
   if (cat.id === "MODELO_620_ESTADO" || cat.id === "MODELO_620_JSON") {
-    body = `hemos recibido su incidencia relativa al Modelo 620 (${tramiteRef}). Estamos revisando el estado y los datos de la solicitud. Le informaremos en cuanto este resuelto.`;
+    body = `hemos recibido su incidencia relativa al Modelo 620 (${tramiteRef}). Estamos revisando el estado, los eventos y los datos de la solicitud. Le informaremos en cuanto este resuelto.`;
   } else if (cat.id === "MODELO_600_JSON") {
-    body = `hemos recibido su incidencia relativa al Modelo 600 (${tramiteRef}). Estamos revisando los datos. Le contactaremos en breve.`;
+    body = `hemos recibido su incidencia relativa al Modelo 600 (${tramiteRef}). Estamos revisando los datos y el JSON CLOB. Le contactaremos en breve.`;
   } else if (cat.id === "MODELO_651_JSON") {
     body = `hemos recibido su incidencia relativa al Modelo 651 (${tramiteRef}). Le informaremos a la mayor brevedad.`;
   } else if (cat.id === "PASARELA_CCO" || cat.id === "PASARELA_FN" || cat.id === "PASARELA_PA") {
@@ -185,7 +290,12 @@ function buildDrafts(ticket, diagnoseResult = {}) {
   const classification = classify(ticket, diagnoseResult);
   const task     = draftTask(ticket, entities, classification, diagnoseResult);
   const followup = draftFollowup(ticket, entities, classification, diagnoseResult);
-  return { classification, task, followup };
+  return {
+    classification,
+    task,
+    followup,
+    evidence: classification.evidence
+  };
 }
 
 module.exports = { classify, buildDrafts, KB_CATEGORIES };

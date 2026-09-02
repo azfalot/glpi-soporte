@@ -1,6 +1,6 @@
 "use strict";
 
-const { launchContext, closeContextSafe } = require("./browserManager");
+const { getSharedPage, closeContextSafe } = require("./browserManager");
 const { processAttachments } = require("./attachmentProcessor");
 
 const PROFILE = ".profile-glpi-ff";
@@ -9,9 +9,9 @@ let _ctx = null, _page = null;
 
 async function getPage() {
   if (_ctx && _page && !_page.isClosed()) return _page;
-  const res = await launchContext(PROFILE, { headless: process.env.HEADLESS === "true" });
-  _ctx = res.context;
-  _page = res.page;
+  const page = await getSharedPage(PROFILE, { headless: process.env.HEADLESS === "true" });
+  _ctx = page.context();
+  _page = page;
   return _page;
 }
 
@@ -19,7 +19,7 @@ async function closeContext() {
   const ctx = _ctx;
   _ctx = null;
   _page = null;
-  await closeContextSafe(ctx, "GLPI");
+  if (ctx) await closeContextSafe(ctx, "GLPI");
 }
 async function ensureCentral(page) {
   if (page.url().includes("/front/central.php")) return;

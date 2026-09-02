@@ -14,6 +14,46 @@ const FF_PREFS = {
   "network.proxy.type":                0
 };
 
+let sharedContext = null;
+let sharedPage = null;
+let sharedProfile = null;
+
+function resolveProfile(profileDirName) {
+  return path.isAbsolute(profileDirName)
+    ? profileDirName
+    : path.join(process.cwd(), profileDirName);
+}
+
+async function getSharedPage(profileDirName, options = {}) {
+  const profilePath = resolveProfile(profileDirName);
+  const sameProfile = sharedProfile && sharedProfile === profilePath;
+  if (sharedContext && sharedPage && !sharedPage.isClosed() && sameProfile) return sharedPage;
+
+  if (sharedContext && sharedPage && !sharedPage.isClosed() && !sameProfile) {
+    await closeContextSafe(sharedContext, "shared-browser").catch(() => {});
+  }
+
+  unlockProfile(profilePath);
+  const isHeadless = options.headless !== undefined
+    ? Boolean(options.headless)
+    : process.env.HEADLESS === "true";
+
+  const context = await firefox.launchPersistentContext(profilePath, {
+    headless: isHeadless,
+    viewport: options.viewport || { width: 1440, height: 900 },
+    ignoreHTTPSErrors: options.ignoreHTTPSErrors !== undefined
+      ? options.ignoreHTTPSErrors === true
+      : process.env.IGNORE_HTTPS_ERRORS === "true",
+    firefoxUserPrefs: { ...FF_PREFS, ...(options.firefoxUserPrefs || {}) }
+  });
+
+  sharedProfile = profilePath;
+  sharedContext = context;
+  sharedPage = context.pages()[0] || await context.newPage();
+  sharedPage.on("dialog", async d => { await d.accept().catch(() => {}); });
+  return sharedPage;
+}
+
 /**
  * Elimina los lock files de un perfil de Firefox si quedó bloqueado por cierre forzoso.
  */
@@ -81,7 +121,17 @@ async function closeContextSafe(context, label = "Firefox") {
 
 module.exports = {
   launchContext,
+  getSharedPage,
   closeContextSafe,
   unlockProfile,
-  FF_PREFS
+  FF_PREFS,
+  getSharedContext: () => sharedContext,
+  resetSharedContext: async () => {
+    if (sharedContext) {
+      await closeContextSafe(sharedContext, "shared-browser").catch(() => {});
+    }
+    sharedContext = null;
+    sharedPage = null;
+    sharedProfile = null;
+  }
 };

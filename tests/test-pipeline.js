@@ -69,6 +69,36 @@ console.log("▶ Iniciando suite de pruebas...");
   console.log("  ✔ Test 2: Clasificación KB OK");
 }
 
+// ── Test 2b: La evidencia de jTraspaso debe vencer a AutoFirma global ────────
+{
+  const ticket = {
+    ticketId: "1571238",
+    title: "[BUZON] modelo 620 error 8720BHG",
+    timeline: [{
+      content: "No se puede finalizar la presentación del modelo 620 aunque hay un CODSOL y datos de solicitud.",
+      attachments: []
+    }]
+  };
+
+  const diagBase = {
+    ticketId: "1571238",
+    entities: { codsol: "GZ2KP7GCQN15U327FEKH", procedimiento: "620", dnis: [], nies: [], matriculas: [] },
+    ppfdatos: { IDDATOS: "789", IDESTADO: "5", CODFORM: "M620", CODSOLICITUD: "GZ2KP7GCQN15U327FEKH" },
+    pago: { IDPAGO: "444", CODESTADO: "PA", IMPORTE: "30.00", N28: "1234567890123456789012345678" },
+    clobParsed: { solicitud: { proc: "620", codsol: "GZ2KP7GCQN15U327FEKH" } }
+  };
+
+  const classification = classify.classify(ticket, diagBase);
+  assert.ok(
+    classification.kbMatch.category.id === "MODELO_620_ESTADO" ||
+    classification.kbMatch.category.id === "MODELO_620_JSON" ||
+    classification.kbMatch.category.id === "AUTOFIRMA_ESTADO5",
+    "Debe preferir una categoría específica del modelo o estado 5"
+  );
+  assert.notStrictEqual(classification.kbMatch.category.id, "AUTOFIRMA_GLOBAL", "No debe caer en AutoFirma global por defecto");
+  console.log("  ✔ Test 2b: Clasificación guiada por diagnóstico OK");
+}
+
 // ── Test 3: Generación de variables y borradores con datos reales de jTraspaso
 {
   const ticket = {
